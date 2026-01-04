@@ -179,30 +179,4 @@ namespace SphereMovement
         public float GetSphereRadius() => sphereRadius;
         public Vector2 GetCurrentSphericalCoords() => _currentSphericalCoords;
     }
-
-    /// <summary>
-    /// 球坐标辅助类
-    /// </summary>
-    public static class SphericalCoordinates
-    {
-        public static Vector2 FromCartesian(Vector3 cartesian)
-        {
-            float radius = cartesian.magnitude;
-            float longitude = Mathf.Atan2(cartesian.x, cartesian.z);
-            float latitude = Mathf.Asin(cartesian.y / radius);
-            return new Vector2(longitude, latitude);
-        }
-
-        public static Vector3 ToCartesian(Vector2 spherical)
-        {
-            float longitude = spherical.x;
-            float latitude = spherical.y;
-
-            float x = Mathf.Cos(latitude) * Mathf.Sin(longitude);
-            float y = Mathf.Sin(latitude);
-            float z = Mathf.Cos(latitude) * Mathf.Cos(longitude);
-
-            return new Vector3(x, y, z);
-        }
-    }
 }
