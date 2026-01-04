@@ -45,8 +45,17 @@ namespace SphereMovement
 
                 float lonDegrees = _movement.CurrentLongitude * Mathf.Rad2Deg;
                 float latDegrees = _movement.CurrentLatitude * Mathf.Rad2Deg;
-                EditorGUILayout.LabelField($"经度: {lonDegrees:F1}°");
-                EditorGUILayout.LabelField($"纬度: {latDegrees:F1}°");
+                EditorGUILayout.LabelField($"经度: {lonDegrees:F1}° ({lonDegrees:F4} rad)");
+                EditorGUILayout.LabelField($"纬度: {latDegrees:F1}° ({latDegrees:F4} rad)");
+
+                // 显示移动方向
+                if (Application.isPlaying)
+                {
+                    Vector3 latTangent = _movement.GetLatitudeTangent(_movement.GetCurrentNormalizedPosition());
+                    Vector3 lonTangent = _movement.GetLongitudeTangent(_movement.GetCurrentNormalizedPosition());
+                    EditorGUILayout.Vector3Field("纬线切线(东西)", latTangent);
+                    EditorGUILayout.Vector3Field("经线切线(南北)", lonTangent);
+                }
 
                 EditorGUI.indentLevel--;
             }
