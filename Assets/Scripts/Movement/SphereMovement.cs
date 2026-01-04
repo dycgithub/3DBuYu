@@ -1,8 +1,11 @@
 using UnityEngine;
 
-[RequireComponent(typeof(Transform))]
 public class SphereMovement : MonoBehaviour
 {
+    [Header("目标设置")]
+    [Tooltip("要在球面上移动的物体。如果为空，则使用挂载此脚本的物体。")]
+    public Transform targetObject;
+
     [Header("球体设置")]
     [Tooltip("球心位置")]
     public Vector3 sphereCenter = Vector3.zero;
@@ -33,9 +36,6 @@ public class SphereMovement : MonoBehaviour
     [Tooltip("经纬线颜色")]
     public Color gridColor = new Color(0f, 1f, 1f, 0.5f);
 
-    [Tooltip("经纬线线宽")]
-    public float lineWidth = 0.05f;
-
     // 当前物体在球面上的位置（球坐标）
     private Vector2 _sphericalCoords;
     private Vector2 _targetSphericalCoords;
@@ -43,6 +43,7 @@ public class SphereMovement : MonoBehaviour
 
     // 缓存Transform
     private Transform _transform;
+    private Transform _targetTransform;
 
     // 当前物体在球面的实际位置
     public Vector3 CurrentPositionOnSphere { get; private set; }
@@ -51,16 +52,31 @@ public class SphereMovement : MonoBehaviour
     public float CurrentLongitude => _sphericalCoords.x;
     public float CurrentLatitude => _sphericalCoords.y;
 
+    // 实际移动的目标物体
+    public Transform MovingObject => _targetTransform ?? _transform;
+
     private void Awake()
     {
         _transform = GetComponent<Transform>();
+        _targetTransform = targetObject;
         InitializePosition();
+    }
+
+    private void OnValidate()
+    {
+        // 在编辑器中实时更新目标引用
+        if (Application.isPlaying == false && targetObject != null)
+        {
+            _targetTransform = targetObject;
+        }
     }
 
     private void InitializePosition()
     {
+        Transform target = MovingObject;
+
         // 计算当前物体位置相对于球心的球坐标
-        Vector3 relativePos = _transform.position - sphereCenter;
+        Vector3 relativePos = target.position - sphereCenter;
         CurrentPositionOnSphere = relativePos.normalized * sphereRadius + sphereCenter;
 
         // 转换为球坐标 (x = 经度, y = 纬度)
@@ -98,6 +114,8 @@ public class SphereMovement : MonoBehaviour
 
     private void UpdatePosition()
     {
+        Transform target = MovingObject;
+
         if (useSmoothMovement)
         {
             // 使用平滑移动到目标球坐标
@@ -116,13 +134,13 @@ public class SphereMovement : MonoBehaviour
         CurrentPositionOnSphere = sphereCenter + relativePos;
 
         // 更新物体位置和朝向
-        _transform.position = CurrentPositionOnSphere;
+        target.position = CurrentPositionOnSphere;
 
         // 让物体面朝移动方向
         Vector3 forward = GetForwardDirection();
         if (forward.sqrMagnitude > 0.001f)
         {
-            _transform.rotation = Quaternion.LookRotation(forward);
+            target.rotation = Quaternion.LookRotation(forward);
         }
     }
 
@@ -145,7 +163,7 @@ public class SphereMovement : MonoBehaviour
     /// </summary>
     public Vector3 GetLongitudeTangent()
     {
-        Vector3 pos = _transform.position - sphereCenter;
+        Vector3 pos = MovingObject.position - sphereCenter;
         Vector3 north = Vector3.up;
         return Vector3.Cross(pos, north).normalized;
     }
@@ -155,7 +173,7 @@ public class SphereMovement : MonoBehaviour
     /// </summary>
     public Vector3 GetLatitudeTangent()
     {
-        Vector3 pos = _transform.position - sphereCenter;
+        Vector3 pos = MovingObject.position - sphereCenter;
         Vector3 north = Vector3.up;
         Vector3 eastDir = Vector3.Cross(north, pos).normalized;
         return eastDir;

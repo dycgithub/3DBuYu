@@ -16,13 +16,17 @@ public class SphereMovementEditor : Editor
     {
         serializedObject.Update();
 
-        // 绘制默认属性
+        // 绘制目标物体字段
+        EditorGUILayout.PropertyField(serializedObject.FindProperty("targetObject"),
+            new GUIContent("目标物体", "要在球面上移动的物体"));
+
+        // 绘制其他属性
         DrawPropertiesExcluding(serializedObject,
             "m_Script",
+            "targetObject",
             "latitudeLines",
             "longitudeLines",
-            "gridColor",
-            "lineWidth");
+            "gridColor");
 
         EditorGUILayout.Space(10f);
         EditorGUILayout.LabelField("经纬线设置", EditorStyles.boldLabel);
@@ -33,8 +37,6 @@ public class SphereMovementEditor : Editor
             new GUIContent("经度线条数", "垂直圆的个数"));
         EditorGUILayout.PropertyField(serializedObject.FindProperty("gridColor"),
             new GUIContent("经纬线颜色"));
-        EditorGUILayout.PropertyField(serializedObject.FindProperty("lineWidth"),
-            new GUIContent("线宽"));
 
         serializedObject.ApplyModifiedProperties();
 
@@ -45,6 +47,9 @@ public class SphereMovementEditor : Editor
         if (_showPreview)
         {
             EditorGUI.indentLevel++;
+
+            Transform targetObj = _movement.MovingObject;
+            EditorGUILayout.ObjectField("当前目标物体", targetObj, typeof(Transform), true);
 
             Vector3 pos = _movement.CurrentPositionOnSphere;
             EditorGUILayout.Vector3Field("球面位置", pos);
