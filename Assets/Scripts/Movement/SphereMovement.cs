@@ -65,7 +65,14 @@ namespace SphereMovement
         private void InitializeSphericalPosition()
         {
             Transform target = TargetObject;
+            if (target == null) return;
+
             Vector3 relativePos = target.position - sphereCenter;
+            if (relativePos.sqrMagnitude < 0.0001f)
+            {
+                relativePos = Vector3.up;
+            }
+
             CurrentPositionOnSphere = relativePos.normalized * sphereRadius + sphereCenter;
             _currentSphericalCoords = SphericalCoordinates.FromCartesian(relativePos);
             _targetSphericalCoords = _currentSphericalCoords;
@@ -97,6 +104,9 @@ namespace SphereMovement
 
         private void UpdateMovement()
         {
+            Transform target = TargetObject;
+            if (target == null) return;
+
             // 平滑插值
             if (useSmoothMovement)
             {
@@ -117,12 +127,11 @@ namespace SphereMovement
             CurrentPositionOnSphere = sphereCenter + relativePos;
 
             // 更新位置和朝向
-            ApplyPositionAndRotation();
+            ApplyPositionAndRotation(target);
         }
 
-        private void ApplyPositionAndRotation()
+        private void ApplyPositionAndRotation(Transform target)
         {
-            Transform target = TargetObject;
             target.position = CurrentPositionOnSphere;
 
             Vector3 forwardDir = CalculateMovementDirection();
@@ -134,8 +143,8 @@ namespace SphereMovement
 
         private Vector3 CalculateMovementDirection()
         {
-            Vector3 horizontal = Input.GetAxis("Horizontal");
-            Vector3 vertical = Input.GetAxis("Vertical");
+            float horizontal = Input.GetAxis("Horizontal");
+            float vertical = Input.GetAxis("Vertical");
 
             Vector3 longitudeTangent = GetLongitudeTangent();
             Vector3 latitudeTangent = GetLatitudeTangent();
@@ -169,5 +178,31 @@ namespace SphereMovement
         public Vector3 GetSphereCenter() => sphereCenter;
         public float GetSphereRadius() => sphereRadius;
         public Vector2 GetCurrentSphericalCoords() => _currentSphericalCoords;
+    }
+
+    /// <summary>
+    /// 球坐标辅助类
+    /// </summary>
+    public static class SphericalCoordinates
+    {
+        public static Vector2 FromCartesian(Vector3 cartesian)
+        {
+            float radius = cartesian.magnitude;
+            float longitude = Mathf.Atan2(cartesian.x, cartesian.z);
+            float latitude = Mathf.Asin(cartesian.y / radius);
+            return new Vector2(longitude, latitude);
+        }
+
+        public static Vector3 ToCartesian(Vector2 spherical)
+        {
+            float longitude = spherical.x;
+            float latitude = spherical.y;
+
+            float x = Mathf.Cos(latitude) * Mathf.Sin(longitude);
+            float y = Mathf.Sin(latitude);
+            float z = Mathf.Cos(latitude) * Mathf.Cos(longitude);
+
+            return new Vector3(x, y, z);
+        }
     }
 }
