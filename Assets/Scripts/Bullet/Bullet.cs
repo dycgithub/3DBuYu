@@ -1,4 +1,5 @@
 using UnityEngine;
+using Utils;
 
 namespace BulletSystem
 {
@@ -14,24 +15,29 @@ namespace BulletSystem
         private float traveledDistance;
         private int penetrationUsed;
         private Vector3 lastPosition;
+        private ObjectPool<Bullet> pool;
 
-        public void Initialize(BulletConfig bulletConfig, Transform targetTransform, float bulletDamage)
+        /// <summary>
+        /// 初始化子弹
+        /// </summary>
+        public void Initialize(BulletConfig bulletConfig, Transform targetTransform, float bulletDamage, ObjectPool<Bullet> bulletPool = null)
         {
             config = bulletConfig;
             target = targetTransform;
             damage = bulletDamage;
+            pool = bulletPool;
             lastPosition = transform.position;
+            traveledDistance = 0;
+            penetrationUsed = 0;
 
             // 应用配置
             if (config != null)
             {
-                // 设置大小
                 if (config.size > 0)
                 {
                     transform.localScale = Vector3.one * config.size;
                 }
 
-                // 设置颜色
                 var renderer = GetComponent<Renderer>();
                 if (renderer != null)
                 {
@@ -40,11 +46,25 @@ namespace BulletSystem
             }
         }
 
+        /// <summary>
+        /// 释放回对象池（替代 Destroy）
+        /// </summary>
+        public void Release()
+        {
+            if (pool != null)
+            {
+                pool.Release(this);
+            }
+            else
+            {
+                Destroy(gameObject);
+            }
+        }
+
         void Start()
         {
-            // 自动销毁超时
-            float maxDist = config != null ? config.maxDistance : 50f;
-            Destroy(gameObject, 5f); // 保险措施
+            // 保险超时自动回收
+            Invoke(nameof(Release), 5f);
         }
 
         void Update()
@@ -86,7 +106,7 @@ namespace BulletSystem
             float maxDist = config != null ? config.maxDistance : 50f;
             if (traveledDistance >= maxDist)
             {
-                Destroy(gameObject);
+                Release();
             }
         }
 
@@ -114,19 +134,19 @@ namespace BulletSystem
                     penetrationUsed++;
                     if (penetrationUsed >= maxPenetration)
                     {
-                        Destroy(gameObject);
+                        Release();
                     }
                 }
                 else
                 {
-                    Destroy(gameObject);
+                    Release();
                 }
             }
             // 击中墙壁
             else if (other.CompareTag("Wall"))
             {
                 PlayHitEffect();
-                Destroy(gameObject);
+                Release();
             }
         }
 
@@ -157,6 +177,11 @@ namespace BulletSystem
             {
                 Instantiate(config.hitEffectPrefab, transform.position, Quaternion.identity);
             }
+        }
+
+        void OnDestroy()
+        {
+            CancelInvoke(nameof(Release));
         }
     }
 }

@@ -1,5 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
+using BulletSystem;
+using Utils;
 
 namespace TurretSystem
 {
@@ -20,6 +22,13 @@ namespace TurretSystem
         [Tooltip("子弹生成点")]
         public Transform firePoint;
 
+        [Header("对象池配置")]
+        [Tooltip("子弹预热数量")]
+        public int bulletPrewarmCount = 10;
+
+        [Tooltip("对象池最大容量")]
+        public int poolMaxSize = 50;
+
         [Header("调试")]
         [Tooltip("是否显示攻击范围")]
         public bool showGizmos = true;
@@ -29,6 +38,7 @@ namespace TurretSystem
         private float lastFireTime;
         private Transform target;
         private List<Transform> enemyList = new List<Transform>();
+        private ObjectPool<Bullet> bulletPool;
 
         // 属性代理
         public float Damage => levelData != null ? levelData.damage : 10f;
@@ -52,6 +62,17 @@ namespace TurretSystem
 
             currentLevel = levelData.level;
             lastFireTime = -FireRate; // 立即可以攻击
+
+            // 初始化子弹对象池
+            if (levelData.bulletConfig != null && levelData.bulletConfig.bulletPrefab != null)
+            {
+                bulletPool = new ObjectPool<Bullet>(
+                    levelData.bulletConfig.bulletPrefab,
+                    transform,
+                    bulletPrewarmCount,
+                    poolMaxSize
+                );
+            }
         }
 
         void Update()
@@ -151,26 +172,30 @@ namespace TurretSystem
             // 播放攻击特效
             PlayAttackEffect();
 
-            // 生成子弹
-            GameObject bulletObj;
-            if (bulletConfig != null && bulletConfig.bulletPrefab != null)
+            // 从对象池获取子弹
+            Bullet bullet;
+            if (bulletPool != null)
             {
-                bulletObj = Instantiate(bulletConfig.bulletPrefab, firePoint.position, firePoint.rotation);
-                var bullet = bulletObj.GetComponent<BulletSystem.Bullet>();
-                if (bullet != null)
-                {
-                    bullet.Initialize(bulletConfig, target, Damage);
-                }
+                bullet = bulletPool.Get();
+                bullet.transform.position = firePoint.position;
+                bullet.transform.rotation = firePoint.rotation;
+                bullet.Initialize(bulletConfig, target, Damage, bulletPool);
+            }
+            else if (bulletConfig != null && bulletConfig.bulletPrefab != null)
+            {
+                // 降级：没有对象池时使用 Instantiate
+                GameObject bulletObj = Instantiate(bulletConfig.bulletPrefab, firePoint.position, firePoint.rotation);
+                bullet = bulletObj.GetComponent<Bullet>();
+                bullet?.Initialize(bulletConfig, target, Damage);
             }
             else
             {
-                // 默认子弹
-                bulletObj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                // 默认子弹（无池）
+                GameObject bulletObj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
                 bulletObj.transform.position = firePoint.position;
                 bulletObj.transform.rotation = firePoint.rotation;
                 bulletObj.transform.localScale = Vector3.one * 0.3f;
-
-                var bullet = bulletObj.AddComponent<BulletSystem.Bullet>();
+                bullet = bulletObj.AddComponent<Bullet>();
                 bullet.Initialize(null, target, Damage);
             }
         }
