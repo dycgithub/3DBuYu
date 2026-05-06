@@ -3,111 +3,66 @@ using UnityEngine;
 namespace SphereMovement
 {
     /// <summary>
-    /// 球坐标与笛卡尔坐标转换工具
+    /// 球面坐标工具类
+    /// 提供笛卡尔坐标和球面坐标之间的转换方法
     /// </summary>
     public static class SphericalCoordinates
     {
         /// <summary>
-        /// 笛卡尔坐标转球坐标
+        /// 将笛卡尔坐标转换为球面坐标
         /// </summary>
-        /// <param name="cartesian">笛卡尔坐标</param>
-        /// <returns>球坐标 (x=经度, y=纬度)</returns>
+        /// <param name="cartesian">单位球面上的笛卡尔坐标 (x, y, z)</param>
+        /// <returns>球面坐标 (longitude, latitude)，单位为弧度</returns>
+        /// <remarks>
+        /// longitude (x): 经度，范围 [-π, π]，从Z轴正方向顺时针测量
+        /// latitude (y): 纬度，范围 [-π/2, π/2]，从赤道向极点测量
+        /// </remarks>
         public static Vector2 FromCartesian(Vector3 cartesian)
         {
-            float radius = cartesian.magnitude;
-            float longitude = Mathf.Atan2(cartesian.x, cartesian.z);
-            float latitude = Mathf.Asin(cartesian.y / radius);
+            // 处理零向量
+            float magnitude = cartesian.magnitude;
+            if (magnitude < 0.0001f)
+            {
+                return Vector2.zero;
+            }
+
+            // 归一化
+            Vector3 normalized = cartesian / magnitude;
+
+            // 经度：使用 atan2(x, z)，因为我们在XZ平面上测量角度
+            float longitude = Mathf.Atan2(normalized.x, normalized.z);
+
+            // 纬度：使用 asin(y)，Y轴是极轴
+            float latitude = Mathf.Asin(normalized.y);
+
             return new Vector2(longitude, latitude);
         }
 
         /// <summary>
-        /// 球坐标转笛卡尔坐标
+        /// 将球面坐标转换为笛卡尔坐标（单位球面）
         /// </summary>
-        /// <param name="spherical">球坐标 (x=经度, y=纬度)</param>
-        /// <returns>笛卡尔坐标</returns>
+        /// <param name="spherical">球面坐标 (longitude, latitude)，单位为弧度</param>
+        /// <returns>单位球面上的笛卡尔坐标 (x, y, z)</returns>
+        /// <remarks>
+        /// longitude (x): 经度，0 时指向 Z 轴正方向
+        /// latitude (y): 纬度，π/2 时指向 Y 轴正方向（北极），-π/2 时指向 Y 轴负方向（南极）
+        /// </remarks>
         public static Vector3 ToCartesian(Vector2 spherical)
         {
             float longitude = spherical.x;
             float latitude = spherical.y;
 
-            float x = Mathf.Cos(latitude) * Mathf.Sin(longitude);
+            // 使用球面坐标公式
+            // x = cos(latitude) * sin(longitude)
+            // y = sin(latitude)
+            // z = cos(latitude) * cos(longitude)
+            float cosLatitude = Mathf.Cos(latitude);
+
+            float x = cosLatitude * Mathf.Sin(longitude);
             float y = Mathf.Sin(latitude);
-            float z = Mathf.Cos(latitude) * Mathf.Cos(longitude);
+            float z = cosLatitude * Mathf.Cos(longitude);
 
             return new Vector3(x, y, z);
-        }
-
-        /// <summary>
-        /// 绘制球面上的纬度线
-        /// </summary>
-        public static void DrawLatitudeLine(Vector3 sphereCenter, float radius, float latitude, Color color, int segments)
-        {
-            Gizmos.color = color;
-            DrawGreatCircle(sphereCenter, radius, latitude, true, segments);
-        }
-
-        /// <summary>
-        /// 绘制球面上的经度线
-        /// </summary>
-        public static void DrawLongitudeLine(Vector3 sphereCenter, float radius, float longitude, Color color, int segments)
-        {
-            Gizmos.color = color;
-            DrawGreatCircle(sphereCenter, radius, longitude, false, segments);
-        }
-
-        /// <summary>
-        /// 绘制大圆（纬线或经线）
-        /// </summary>
-        private static void DrawGreatCircle(Vector3 center, float radius, float angle, bool isLatitude, int segments)
-        {
-            Vector3 prevPoint = Vector3.zero;
-            bool firstPoint = true;
-
-            float startAngle = isLatitude ? -Mathf.PI : -Mathf.PI / 2f;
-            float endAngle = isLatitude ? Mathf.PI : Mathf.PI / 2f;
-
-            for (int i = 0; i <= segments; i++)
-            {
-                float t = (float)i / segments;
-                float currentAngle = Mathf.Lerp(startAngle, endAngle, t);
-
-                Vector2 spherical = isLatitude
-                    ? new Vector2(currentAngle, angle)
-                    : new Vector2(angle, currentAngle);
-
-                Vector3 localPos = ToCartesian(spherical) * radius;
-                Vector3 worldPos = center + localPos;
-
-                if (!firstPoint)
-                {
-                    Gizmos.DrawLine(prevPoint, worldPos);
-                }
-
-                prevPoint = worldPos;
-                firstPoint = false;
-            }
-        }
-
-        /// <summary>
-        /// 绘制完整的球面网格
-        /// </summary>
-        public static void DrawSphereGrid(Vector3 center, float radius, int latitudeLines, int longitudeLines, Color color)
-        {
-            Gizmos.color = color;
-
-            // 绘制纬度线
-            for (int i = 0; i <= latitudeLines; i++)
-            {
-                float lat = Mathf.Lerp(-Mathf.PI / 2f, Mathf.PI / 2f, (float)i / latitudeLines);
-                DrawLatitudeLine(center, radius, lat, color, longitudeLines * 4);
-            }
-
-            // 绘制经度线
-            for (int i = 0; i <= longitudeLines; i++)
-            {
-                float lon = Mathf.Lerp(-Mathf.PI, Mathf.PI, (float)i / longitudeLines);
-                DrawLongitudeLine(center, radius, lon, color, latitudeLines * 4);
-            }
         }
     }
 }

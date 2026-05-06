@@ -1,6 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 using BulletSystem;
+using EffectSystem;
 using Utils;
 
 namespace TurretSystem
@@ -11,27 +12,18 @@ namespace TurretSystem
     /// </summary>
     public class Turret : MonoBehaviour
     {
-        [Header("数据配置")]
-        [Tooltip("初始等级数据")]
-        public TurretLevelData levelData;
+        [Header("数据配置")] [Tooltip("初始等级数据")] public TurretLevelData levelData;
 
-        [Header("炮塔引用")]
-        [Tooltip("炮塔模型(用于旋转)")]
+        [Header("炮塔引用")] [Tooltip("炮塔模型(用于旋转)")]
         public Transform turretHead;
 
-        [Tooltip("子弹生成点")]
-        public Transform firePoint;
+        [Tooltip("子弹生成点")] public Transform firePoint;
 
-        [Header("对象池配置")]
-        [Tooltip("子弹预热数量")]
-        public int bulletPrewarmCount = 10;
+        [Header("对象池配置")] [Tooltip("子弹预热数量")] public int bulletPrewarmCount = 10;
 
-        [Tooltip("对象池最大容量")]
-        public int poolMaxSize = 50;
+        [Tooltip("对象池最大容量")] public int poolMaxSize = 50;
 
-        [Header("调试")]
-        [Tooltip("是否显示攻击范围")]
-        public bool showGizmos = true;
+        [Header("调试")] [Tooltip("是否显示攻击范围")] public bool showGizmos = true;
 
         // 当前状态
         private int currentLevel = 1;
@@ -66,14 +58,25 @@ namespace TurretSystem
             // 初始化子弹对象池
             if (levelData.bulletConfig != null && levelData.bulletConfig.bulletPrefab != null)
             {
-                bulletPool = new ObjectPool<Bullet>(
-                    levelData.bulletConfig.bulletPrefab,
-                    transform,
-                    bulletPrewarmCount,
-                    poolMaxSize
-                );
+                // 从预制体中获取Bullet组件作为模板
+                Bullet bulletTemplate = levelData.bulletConfig.bulletPrefab.GetComponent<Bullet>();
+                if (bulletTemplate != null)
+                {
+                    bulletPool = new ObjectPool<Bullet>(
+                        bulletTemplate, // 使用Bullet组件作为模板
+                        transform,
+                        bulletPrewarmCount,
+                        poolMaxSize
+                    );
+                }
+                else
+                {
+                    Debug.LogError($"子弹预制体 {levelData.bulletConfig.bulletPrefab.name} 缺少Bullet组件!",
+                        levelData.bulletConfig.bulletPrefab);
+                }
             }
         }
+
 
         void Update()
         {
@@ -210,7 +213,8 @@ namespace TurretSystem
             // 优先使用预制体
             if (levelData.attackEffectPrefab != null)
             {
-                Instantiate(levelData.attackEffectPrefab, firePoint != null ? firePoint.position : transform.position, Quaternion.identity);
+                Instantiate(levelData.attackEffectPrefab, firePoint != null ? firePoint.position : transform.position,
+                    Quaternion.identity);
             }
             // 其次尝试通过名称查找特效
             else if (!string.IsNullOrEmpty(levelData.attackEffectName))
@@ -218,7 +222,8 @@ namespace TurretSystem
                 var effectManager = FindObjectOfType<EffectManager>();
                 if (effectManager != null)
                 {
-                    effectManager.PlayEffect(levelData.attackEffectName, firePoint != null ? firePoint.position : transform.position);
+                    effectManager.PlayEffect(levelData.attackEffectName,
+                        firePoint != null ? firePoint.position : transform.position);
                 }
             }
         }
@@ -313,6 +318,23 @@ namespace TurretSystem
         {
             levelData = data;
             Initialize();
+        }
+
+        /// <summary>
+        /// 刷新配置 - 在热更新后重新初始化
+        /// </summary>
+        public void RefreshConfiguration()
+        {
+            // 重新初始化以应用新的配置值
+            Initialize();
+
+            // 如果正在运行，确保状态正确
+            if (levelData != null)
+            {
+                currentLevel = levelData.level;
+            }
+
+            Debug.Log($"[Turret] Configuration refreshed on {gameObject.name}");
         }
 
         void OnDrawGizmosSelected()
