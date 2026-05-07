@@ -1,5 +1,5 @@
 using System;
-using CameraSystem;
+
 using EffectSystem;
 using GameSystem;
 using UnityEngine;
@@ -467,7 +467,7 @@ namespace PlayerSystem
         private void PlayDamageEffects()
         {
             // 摄像机震动
-            CameraShake.Instance?.Shake(0.2f, 0.3f);
+            //TODO: CameraShake.Instance?.Shake(0.2f, 0.3f);
 
             // 播放受伤特效
             if (damageEffectPrefab != null)
@@ -503,7 +503,7 @@ namespace PlayerSystem
             }
 
             // 摄像机强烈震动
-            CameraShake.Instance?.Shake(0.5f, 0.8f);
+            //TODO: CameraShake.Instance?.Shake(0.5f, 0.8f);
 
             // 通过特效管理器播放
             EffectManager.Instance?.PlayEffect("PlayerDeath", transform.position);

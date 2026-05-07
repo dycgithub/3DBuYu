@@ -2,7 +2,7 @@
 
 ## 模块概述
 
-敌人系统是游戏中负责所有敌人生成、AI行为、战斗和生命周期的核心系统。采用状态机模式管理敌人行为，支持多种敌人类型和扩展机制。
+敌人系统管理**球体内部游动的怪物鱼群**。鱼群使用 boids 群游算法在球内三维空间自由游动，产生自然的聚集、分离、巡游行为。部分鱼会主动靠近球壳（炮台方向）。击杀鱼群获得分数，稀有鱼种触发特殊事件。
 
 ## 架构设计
 
@@ -10,422 +10,129 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    EnemyBase (Abstract)                       │
+│                 EnemyBase (Abstract)                         │
 ├─────────────────────────────────────────────────────────────┤
-│  - 状态机管理 (Idle/Patrol/Chase/Attack/Dead)                │
 │  - 生命系统 (Health/Damage/Death)                            │
-│  - 目标检测 (Range/Layer/Tag)                                │
-│  - 掉落系统 (Coin/Exp/Items)                                 │
+│  - 掉落系统 (分数/Buff道具/时间包)                            │
+│  - 球内约束 (超出球体折返)                                   │
 └─────────────────────────────────────────────────────────────┘
-```
-
-### 类图
-
-```
-                    ┌──────────────────┐
-                    │    EnemyBase     │
-                    │   (Abstract)     │
-                    └────────┬─────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        │                    │                    │
-┌───────▼────────┐  ┌────────▼────────┐  ┌─────────▼────────┐
-│  EnemyNormal   │  │   EnemyFast    │  │    EnemyTank     │
-│  (Balanced)    │  │   (Speed)      │  │   (Defense)      │
-└────────────────┘  └────────────────┘  └──────────────────┘
+         │
+         ├── EnemyNormal     (普通鱼, boids主体)
+         ├── EnemyFast       (快速鱼, 高速巡游)
+         ├── EnemyTank       (坦克鱼, 大型慢速)
+         ├── EnemyFlying     (飞鱼, 上下波动)
+         ├── GoldenFish      (黄金鱼, 稀有, 触发抽奖)
+         └── BossFish        (BOSS鱼, 关卡BOSS)
 
 ┌─────────────────────────────────────────────────────────┐
-│                     StateMachine                        │
+│            Flocking System (Boids算法)                   │
 ├─────────────────────────────────────────────────────────┤
-│  - EnterState/ExitState/UpdateState                     │
-│  - 状态转换条件检查                                       │
-│  - 状态行为执行                                          │
+│  - globalFlock: 鱼群管理器, 生成/目标/边界               │
+│  - flock: 单鱼行为, 分离/聚合/对齐                       │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ## 核心功能规格
 
-### 1. 状态机系统
+### 1. 敌人类型
 
-| 状态 | 枚举值 | 行为描述 |
-|------|--------|----------|
-| `Idle` | 0 | 待机：原地静止，检测玩家 |
-| `Patrol` | 1 | 巡逻：在区域内随机移动 |
-| `Chase` | 2 | 追击：向玩家方向移动 |
-| `Attack` | 3 | 攻击：在范围内攻击玩家 |
-| `Dead` | 4 | 死亡：播放死亡动画并销毁 |
+| 类型 | 血量 | 速度 | 击杀分 | 行为特征 |
+|------|------|------|:---:|---------|
+| **普通鱼** | 30 | 2.0 | 10 | 标准 boids 行为，占鱼群 60%+ |
+| **快速鱼** | 15 | 5.0 | 25 | 高速巡游，偶尔冲刺靠近球壳 |
+| **坦克鱼** | 120 | 1.2 | 50 | 大型慢速，吸引火力保护小鱼 |
+| **飞鱼** | 40 | 3.5 | 35 | 上下波动飞行，更难瞄准 |
+| **黄金鱼** | 80 | 2.5 | 200 | 稀有(3%)，击杀触发抽奖轮盘 |
+| **BOSS鱼** | 500 | 1.0 | 1000 | 关卡BOSS，巨大体型 |
 
-**状态转换图**:
+### 2. 鱼群行为 (Boids 算法)
 
-```
-                    ┌─────────────┐
-         ┌─────────▶│    Idle     │◀──────────┐
-         │          └──────┬──────┘           │
-         │                 │                 │
-         │                 ▼                 │
-         │          ┌─────────────┐        │
-         │    ┌─────│   Patrol    │────┐   │
-         │    │     └─────────────┘    │   │
-         │    │                        │   │
-         │    └────────────────────────┘   │
-         │                                  │
-         │          ┌─────────────┐        │
-         └─────────│    Chase    │────────┘
-    (丢失目标)      └──────┬──────┘      (发现目标)
-                          │
-                          ▼
-                   ┌─────────────┐
-                   │    Attack   │
-                   └─────────────┘
-                          │
-                          ▼
-                   ┌─────────────┐
-                   │     Dead    │
-                   └─────────────┘
-```
+三条核心规则：
 
-### 2. 敌人类型配置
+| 规则 | 权重 | 说明 |
+|------|------|------|
+| **分离** | 1.5 | 避免与邻近鱼碰撞 (距离 < 1.0m) |
+| **聚合** | 1.0 | 向邻近鱼群中心靠拢 (距离 < 3.0m) |
+| **对齐** | 0.8 | 匹配邻近鱼的平均速度方向 |
 
-#### 普通敌人 (EnemyNormal)
+额外规则：
+- **球内约束**: 鱼的位置始终限制在球体半径内，超出时转向球心
+- **炮台趋向**: 15% 的鱼在炮台附近游动（增加可射击目标）
+- **BOSS光环**: BOSS鱼周围聚集保护性小鱼
 
-| 属性 | 默认值 | 说明 |
+### 3. 掉落系统
+
+击杀敌人后掉落：
+
+| 掉落类型 | 概率 | 内容 |
+|----------|:---:|------|
+| 分数包 | 15% | +50分 |
+| Buff道具(临时) | 8% | 随机临时Buff(15-25s) |
+| 时间包 | 5% | +10秒 |
+| 无掉落 | 72% | — |
+
+### 4. 生成规则
+
+| 参数 | 初始值 | 说明 |
 |------|--------|------|
-| `maxHealth` | 100f | 最大生命值 |
-| `moveSpeed` | 3f | 移动速度 |
-| `attackDamage` | 10f | 攻击力 |
-| `attackCooldown` | 1f | 攻击冷却 |
-| `patrolRadius` | 5f | 巡逻半径 |
+| `totalFishCount` | 25 | 场上总鱼数 |
+| `fishCountPerLevel` | +5/关 | 每关递增 |
+| `maxFishCount` | 150 | 场上最大鱼数 |
+| `spawnInterval` | 3s | 补充间隔 |
+| `spawnArea` | 球内随机 | 球体内部任意位置 |
+| `goldenFishRate` | 3% | 黄金鱼出现概率 |
+| `bossLevels` | 5, 10 | BOSS关卡 |
 
-#### 快速敌人 (EnemyFast)
+### 5. 难度曲线
 
-| 属性 | 默认值 | 说明 |
-|------|--------|------|
-| `maxHealth` | 50f | 最大生命值 |
-| `moveSpeed` | 6f | 移动速度 |
-| `sprintMultiplier` | 1.5f | 冲刺倍率 |
-| `sprintDuration` | 2f | 冲刺时长 |
-| `dodgeChance` | 0.3f | 闪避概率 |
-
-#### 坦克敌人 (EnemyTank)
-
-| 属性 | 默认值 | 说明 |
-|------|--------|------|
-| `maxHealth` | 300f | 最大生命值 |
-| `moveSpeed` | 1.5f | 移动速度 |
-| `shieldValue` | 50f | 护盾值 |
-| `shieldRegenRate` | 5f | 护盾恢复速度 |
-| `chargeDistance` | 10f | 冲锋距离 |
-
-#### 飞行敌人 (EnemyFlying)
-
-| 属性 | 默认值 | 说明 |
-|------|--------|------|
-| `maxHealth` | 80f | 最大生命值 |
-| `moveSpeed` | 4f | 移动速度 |
-| `flyHeight` | 5f | 飞行高度 |
-| `diveAttackRange` | 8f | 俯冲范围 |
-| `circleRadius` | 3f | 盘旋半径 |
-
-### 3. 生命系统
-
-```csharp
-/// <summary>
-/// 受到伤害
-/// </summary>
-public virtual void TakeDamage(float damage)
-{
-    if (isDead) return;
-
-    currentHealth -= damage;
-
-    // 播放受击特效
-    PlayHitEffect();
-
-    // 播放受击动画
-    PlayAnimation("Hit");
-
-    // 触发受伤事件
-    OnDamageTaken(damage);
-
-    if (currentHealth <= 0)
-    {
-        Die();
-    }
-}
-
-/// <summary>
-/// 死亡处理
-/// </summary>
-protected virtual void Die()
-{
-    if (isDead) return;
-
-    isDead = true;
-    currentState = EnemyState.Dead;
-
-    // 禁用碰撞器
-    if (enemyCollider != null)
-        enemyCollider.enabled = false;
-
-    // 播放死亡特效
-    PlayDeathEffect();
-
-    // 播放死亡动画
-    PlayAnimation("Death");
-
-    // 掉落物品
-    DropItems();
-
-    // 触发死亡事件
-    OnDeath();
-
-    // 延迟销毁
-    StartCoroutine(DestroyAfterDelay(3f));
-}
-```
-
-### 4. 掉落系统
-
-```csharp
-/// <summary>
-/// 掉落物品
-/// </summary>
-protected virtual void DropItems()
-{
-    // 金币
-    int coins = Mathf.RoundToInt(coinDropAmount * Random.Range(0.8f, 1.2f));
-    DropManager.Instance?.SpawnCoin(transform.position, coins);
-
-    // 经验值
-    int exp = experienceValue;
-    DropManager.Instance?.SpawnExperience(transform.position, exp);
-
-    // 随机掉落物品
-    if (Random.value <= dropChance)
-    {
-        DropManager.Instance?.SpawnRandomItem(transform.position);
-    }
-}
-```
+| 关卡 | 活跃鱼类型 | 血量倍率 | 积分倍率 |
+|:---:|-----------|:---:|:---:|
+| 1 | 普通鱼 | ×1.0 | ×1.0 |
+| 2 | 普通鱼 + 快速鱼(15%) | ×1.2 | ×1.1 |
+| 3 | 普通鱼 + 快速鱼 + 飞鱼(10%) | ×1.5 | ×1.2 |
+| 4 | 全类型 + 坦克鱼(10%) | ×2.0 | ×1.4 |
+| 5 | BOSS关 | ×2.5 | ×1.5 |
+| 6-9 | 全类型混出 | ×2.8→4.0 | ×1.6→2.0 |
+| 10 | 最终BOSS | ×5.0 | ×3.0 |
 
 ## 接口定义
 
-### 公共方法
-
 ```csharp
-/// <summary>
-/// 设置目标
-/// </summary>
-public virtual void SetTarget(Transform playerTarget)
+public virtual void TakeDamage(float damage, BulletType bulletType);
+public virtual void Die();
+protected virtual void DropItems();           // 分数+道具
+public virtual void ApplyBuff(BuffType buff);  // 减速/冰冻
 
-/// <summary>
-/// 受到伤害
-/// </summary>
-public virtual void TakeDamage(float damage)
-
-/// <summary>
-/// 恢复生命
-/// </summary>
-public virtual void Heal(float amount)
-
-/// <summary>
-/// 眩晕控制
-/// </summary>
-public virtual void Stun(float duration)
-
-/// <summary>
-/// 击退效果
-/// </summary>
-public virtual void Knockback(Vector3 direction, float force)
-```
-
-### 事件
-
-```csharp
-/// <summary>
-/// 敌人死亡事件
-/// </summary>
 public static event Action<EnemyBase> OnEnemyDied;
-
-/// <summary>
-/// 敌人受伤事件
-/// </summary>
-public event Action<float> OnEnemyDamaged;
-
-/// <summary>
-/// 状态改变事件
-/// </summary>
-public event Action<EnemyState> OnStateChanged;
+public static event Action<EnemyBase> OnGoldenFishKilled;  // 触发抽奖
+public static event Action<EnemyBase> OnBossKilled;
 ```
 
 ## 性能优化
 
-### 1. 目标检测优化
-
-```csharp
-// 使用非分配式检测
-private Collider[] hitColliders = new Collider[20];
-
-private void FindTargetNonAlloc()
-{
-    int numColliders = Physics.OverlapSphereNonAlloc(
-        transform.position,
-        detectionRange,
-        hitColliders,
-        targetLayer
-    );
-
-    float closestDistance = float.MaxValue;
-    Transform closestTarget = null;
-
-    for (int i = 0; i < numColliders; i++)
-    {
-        float distance = Vector3.Distance(transform.position, hitColliders[i].transform.position);
-        if (distance < closestDistance)
-        {
-            closestDistance = distance;
-            closestTarget = hitColliders[i].transform;
-        }
-    }
-
-    target = closestTarget;
-}
-```
-
-### 2. LOD系统
-
-```csharp
-public class EnemyLOD : MonoBehaviour
-{
-    [Header("LOD设置")]
-    public float highDetailDistance = 20f;
-    public float mediumDetailDistance = 50f;
-    public float cullDistance = 100f;
-
-    [Header("组件引用")]
-    public Animator animator;
-    public ParticleSystem effects;
-    public MonoBehaviour[] aiScripts;
-
-    private Transform player;
-    private float updateInterval = 0.5f;
-    private float lastUpdate;
-
-    void Update()
-    {
-        if (Time.time - lastUpdate < updateInterval) return;
-        lastUpdate = Time.time;
-
-        if (player == null)
-        {
-            player = GameObject.FindGameObjectWithTag("Player")?.transform;
-            return;
-        }
-
-        float distance = Vector3.Distance(transform.position, player.position);
-        UpdateLOD(distance);
-    }
-
-    private void UpdateLOD(float distance)
-    {
-        if (distance > cullDistance)
-        {
-            // 完全隐藏
-            SetActive(false);
-        }
-        else if (distance > mediumDetailDistance)
-        {
-            // 低细节：禁用AI和特效
-            SetAIEnabled(false);
-            SetEffectsEnabled(false);
-        }
-        else if (distance > highDetailDistance)
-        {
-            // 中等细节：启用AI，减少特效
-            SetAIEnabled(true);
-            SetEffectsEnabled(false);
-        }
-        else
-        {
-            // 高细节：完全启用
-            SetActive(true);
-            SetAIEnabled(true);
-            SetEffectsEnabled(true);
-        }
-    }
-
-    private void SetActive(bool active)
-    {
-        if (gameObject.activeSelf != active)
-        {
-            gameObject.SetActive(active);
-        }
-    }
-
-    private void SetAIEnabled(bool enabled)
-    {
-        foreach (var script in aiScripts)
-        {
-            script.enabled = enabled;
-        }
-    }
-
-    private void SetEffectsEnabled(bool enabled)
-    {
-        if (effects != null)
-        {
-            if (enabled && !effects.isPlaying)
-                effects.Play();
-            else if (!enabled && effects.isPlaying)
-                effects.Stop();
-        }
-    }
-}
-```
+- Boids 计算使用 ECS/Jobs 优化（鱼群 > 100 时必需）
+- 对象池管理所有鱼实例
+- LOD: 远距离鱼降低 boids 计算频率
+- 使用 `Physics.OverlapSphereNonAlloc` 避免分配
 
 ## 配置示例
 
 ```json
 {
   "enemies": {
-    "normal": {
-      "maxHealth": 100,
-      "moveSpeed": 3,
-      "attackDamage": 10,
-      "attackCooldown": 1,
-      "detectionRange": 10,
-      "attackRange": 1.5,
-      "coinDrop": 10,
-      "experience": 20
-    },
-    "fast": {
-      "maxHealth": 50,
-      "moveSpeed": 6,
-      "sprintMultiplier": 1.5,
-      "dodgeChance": 0.3,
-      "attackDamage": 5,
-      "coinDrop": 15,
-      "experience": 25
-    },
-    "tank": {
-      "maxHealth": 300,
-      "moveSpeed": 1.5,
-      "shieldValue": 50,
-      "shieldRegenRate": 5,
-      "chargeDamage": 30,
-      "attackDamage": 20,
-      "coinDrop": 30,
-      "experience": 50
-    },
-    "flying": {
-      "maxHealth": 80,
-      "moveSpeed": 4,
-      "flyHeight": 5,
-      "diveAttackDamage": 15,
-      "attackDamage": 8,
-      "coinDrop": 20,
-      "experience": 30
-    }
+    "normal":    { "hp": 30, "speed": 2.0, "score": 10 },
+    "fast":      { "hp": 15, "speed": 5.0, "score": 25 },
+    "tank":      { "hp": 120, "speed": 1.2, "score": 50 },
+    "flying":    { "hp": 40, "speed": 3.5, "score": 35 },
+    "golden":    { "hp": 80, "speed": 2.5, "score": 200, "spawnRate": 0.03 },
+    "boss":      { "hp": 500, "speed": 1.0, "score": 1000 }
+  },
+  "flocking": {
+    "separationWeight": 1.5,
+    "cohesionWeight": 1.0,
+    "alignmentWeight": 0.8,
+    "neighborRadius": 3.0,
+    "separationRadius": 1.0
   }
 }
 ```
@@ -434,17 +141,21 @@ public class EnemyLOD : MonoBehaviour
 
 ```
 EnemySystem
-├── Effects/EffectManager (特效)
-├── Game/GameManager (游戏状态)
-├── Game/DropManager (掉落)
-├── Player/PlayerHealth (伤害)
-├── Utils/ObjectPool (对象池)
-└── Audio/AudioManager (音效)
+├── Flocking/ (boids 群游)
+├── EffectManager (死亡特效/黄金鱼特效)
+├── ScoreManager (击杀积分)
+├── BuffManager (掉落Buff)
+├── TimerSystem (掉落时间包)
+├── ObjectPool (鱼对象池)
+└── AudioManager (鱼群音效)
 ```
 
 ## 测试要点
 
-1. **功能测试**: 状态转换正确性、AI决策逻辑、攻击判定
-2. **性能测试**: 大量敌人时的帧率、检测频率优化
-3. **边界测试**: 玩家死亡时敌人行为、LOD切换平滑度
-4. **平衡测试**: 各类型敌人难度曲线、掉落合理性
+1. **功能测试**: boids 行为正确性、球内约束、掉落概率
+2. **性能测试**: 150条鱼 boids 计算帧率、对象池压力
+3. **边界测试**: 球体边界行为、所有鱼同时死亡、黄金鱼触发
+
+---
+
+*对齐 GDD v3.0: 球内鱼群 + boids + 黄金鱼抽奖*

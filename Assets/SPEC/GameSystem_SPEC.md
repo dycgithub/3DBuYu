@@ -2,312 +2,286 @@
 
 ## 模块概述
 
-游戏系统是游戏的中央控制器，负责管理游戏状态、流程控制、资源管理和存档系统。它协调各个子系统，确保游戏逻辑的正确执行。
+游戏系统是中央控制器，管理游戏状态、**分数资源**、**倒计时**、**Buff系统**和**关卡流程**。不同于传统塔防的"金币/经验"体系，本游戏采用**分数即资源**模型 — 分数既是通关指标也是消耗货币。
 
 ## 子系统列表
 
-1. **GameManager** - 游戏状态管理
-2. **ResourceManager** - 资源管理（金币、经验、宝石等）
-3. **SaveSystem** - 存档系统
-4. **DropManager** - 掉落管理
+1. **GameManager** — 游戏状态机
+2. **ScoreManager** — 分数管理（获取/消耗/门槛检测）
+3. **TimerSystem** — 倒计时系统
+4. **BuffManager** — Buff 叠加与效果管理
+5. **LevelManager** — 关卡配置与难度曲线
+6. **SaveSystem** — 永久进度、解锁、设置存档
 
-## GameManager 规格
+---
 
-### 核心功能
+## 1. GameManager — 游戏状态机
+
+### 状态流转
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     GameManager                         │
-├─────────────────────────────────────────────────────────┤
-│  - 游戏状态机 (Menu/Playing/Paused/GameOver/Victory)   │
-│  - 难度管理 (Easy/Normal/Hard/Nightmare)               │
-│  - 场景管理 (加载/切换/进度)                            │
-│  - 事件系统 (游戏开始/暂停/结束/胜利)                   │
-│  - 统计追踪 (游戏时间/击杀数/波数)                       │
-└─────────────────────────────────────────────────────────┘
+主菜单 ──→ 游戏中 ──→ 通关结算 ──→ 下一关
+              │          │
+              │          └── 分数 ≥ 门槛 → 晋级
+              │
+              ├── Tab → 商店(时间不暂停)
+              │
+              └── 时间到 → 分数 < 门槛 → 失败结算
 ```
 
 ### 游戏状态
 
-| 状态 | 说明 | 允许操作 |
-|------|------|----------|
-| `Menu` | 主菜单状态 | 开始游戏、设置、退出 |
-| `Playing` | 游戏进行中 | 移动、攻击、暂停 |
-| `Paused` | 暂停状态 | 继续、重试、返回菜单 |
-| `GameOver` | 游戏结束 | 重试、返回菜单 |
-| `Victory` | 胜利状态 | 下一关、返回菜单 |
+| 状态 | 说明 |
+|------|------|
+| `Menu` | 主菜单 |
+| `Playing` | 核心循环 |
+| `Shop` | 商店（时间不暂停） |
+| `Lottery` | 抽奖轮盘（时间暂停） |
+| `LevelComplete` | 通关结算 |
+| `GameOver` | 失败结算 |
 
-### 难度配置
-
-| 难度 | 敌人血量倍率 | 敌人伤害倍率 | 敌人数量倍率 | 奖励倍率 |
-|------|-------------|-------------|-------------|---------|
-| `Easy` | 0.7x | 0.7x | 0.8x | 0.8x |
-| `Normal` | 1.0x | 1.0x | 1.0x | 1.0x |
-| `Hard` | 1.3x | 1.3x | 1.2x | 1.2x |
-| `Nightmare` | 2.0x | 1.8x | 1.5x | 2.0x |
-
-### 事件接口
+### 事件
 
 ```csharp
-/// <summary>
-/// 游戏开始事件
-/// </summary>
-public event Action OnGameStarted;
-
-/// <summary>
-/// 游戏暂停事件
-/// </summary>
-public event Action OnGamePaused;
-
-/// <summary>
-/// 游戏恢复事件
-/// </summary>
-public event Action OnGameResumed;
-
-/// <summary>
-/// 游戏结束事件
-/// </summary>
+public event Action<GameState> OnStateChanged;
+public event Action<int> OnLevelStarted;
+public event Action<int, bool> OnLevelEnded;    // (关卡号, 是否达标)
 public event Action OnGameOver;
-
-/// <summary>
-/// 游戏胜利事件
-/// </summary>
-public event Action OnVictory;
-
-/// <summary>
-/// 难度改变事件
-/// </summary>
-public event Action<Difficulty> OnDifficultyChanged;
-
-/// <summary>
-/// 统计更新事件
-/// </summary>
-public event Action<GameStats> OnStatsUpdated;
 ```
 
-## ResourceManager 规格
+---
 
-### 资源类型
+## 2. ScoreManager — 分数=资源
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   ResourceManager                       │
-├─────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  Coins (金币)                                   │   │
-│  │  - 用途: 购买、升级                             │   │
-│  │  - 获取: 击杀敌人、掉落、任务                   │   │
-│  └─────────────────────────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  Experience (经验值)                            │   │
-│  │  - 用途: 玩家升级                               │   │
-│  │  - 获取: 击杀敌人、完成任务                     │   │
-│  └─────────────────────────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  Gems (宝石)                                    │   │
-│  │  - 用途: 高级物品、复活                         │   │
-│  │  - 获取: 特殊事件、成就、付费                   │   │
-│  └─────────────────────────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  Keys (钥匙)                                    │   │
-│  │  - 用途: 开启宝箱、门                           │   │
-│  │  - 获取: 掉落、任务                             │   │
-│  └─────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-```
+### 核心设计
 
-### 资源数据接口
+分数是**双重身份**:
+- **积分**: 通关门槛指标
+- **货币**: 高级子弹消耗 + 商店购买
+
+### 接口
 
 ```csharp
-/// <summary>
-/// 资源数据
-/// </summary>
-[System.Serializable]
-public class ResourceData
-{
-    public int coins;
-    public int totalCoinsEarned;      // 总获得金币
-    public int experience;
-    public int playerLevel;
-    public int gems;
-    public int keys;
-    public int skillPoints;             // 技能点
-}
+public int CurrentScore { get; }
+public int TotalScoreEarned { get; }  // 历史总分
 
-/// <summary>
-/// 资源事件参数
-/// </summary>
-public class ResourceEventArgs : EventArgs
-{
-    public ResourceType ResourceType { get; set; }
-    public int OldValue { get; set; }
-    public int NewValue { get; set; }
-    public int ChangeAmount => NewValue - OldValue;
-    public string Source { get; set; }  // 变化来源
-}
+public void AddScore(int amount, string source = "");
+public bool SpendScore(int amount, string source = "");  // 返回是否成功
+public bool CanAfford(int cost);
 ```
 
-### 资源管理方法
+### 获取来源
+
+| 来源 | 基础分 | 倍率 |
+|------|:---:|------|
+| 击杀普通鱼 | 10 | ×积分倍率 |
+| 击杀快速鱼 | 25 | ×积分倍率 |
+| 击杀飞鱼 | 35 | ×积分倍率 |
+| 击杀坦克鱼 | 50 | ×积分倍率 |
+| 击杀黄金鱼 | 200 | ×积分倍率 |
+| 击杀BOSS鱼 | 1000 | ×积分倍率 |
+| 每发命中 | +2 | 鼓励精准 |
+| 分数包掉落 | +50 | — |
+
+### 消耗出口
+
+| 消耗 | 说明 |
+|------|------|
+| 高级弹发射 | 5~20分/发（取决于子弹类型） |
+| 解锁子弹 | 500~5000分（永久） |
+| 子弹升级 | 200~1600分/级 |
+| 炮台升级 | 150~1000分/级 |
+| 商店Buff | 300~3000分 |
+
+---
+
+## 3. TimerSystem — 倒计时
+
+### 核心设计
+
+每关有固定倒计时。时间归零 → 检查分数是否达标。
+
+### 参数
+
+| 关卡 | 限时(秒) | 门槛分数 |
+|:---:|:---:|:---:|
+| 1 | 120 | 500 |
+| 2 | 150 | 1200 |
+| 3 | 180 | 2500 |
+| 4 | 200 | 4000 |
+| 5 (BOSS) | 240 | 6000 |
+| 6 | 240 | 9000 |
+| 7 | 270 | 13000 |
+| 8 | 300 | 18000 |
+| 9 | 330 | 25000 |
+| 10 | 360 | 35000 |
+
+### 接口
 
 ```csharp
-/// <summary>
-/// 添加金币
-/// </summary>
-public void AddCoins(int amount, string source = "")
+public float RemainingTime { get; }
+public bool IsTimeUp { get; }
+public bool IsPaused { get; }
 
-/// <summary>
-/// 消耗金币
-/// </summary>
-public bool SpendCoins(int amount, string source = "")
+public void StartTimer(float seconds);
+public void AddTime(float seconds);    // +时间Buff
+public void Pause();
+public void Resume();
 
-/// <summary>
-/// 添加经验值
-/// </summary>
-public void AddExperience(int amount, string source = "")
-
-/// <summary>
-/// 检查资源是否足够
-/// </summary>
-public bool HasEnoughResources(ResourceCost cost)
-
-/// <summary>
-/// 消费资源
-/// </summary>
-public bool ConsumeResources(ResourceCost cost, string source = "")
+public event Action<float> OnTimeChanged;    // 每秒
+public event Action OnTimeUp;                // 时间到
 ```
 
-## SaveSystem 规格
+### 时间Buff
 
-### 存档类型
+- **击杀掉落**: 时间包 +10秒（概率5%）
+- **商店购买**: +30秒（500分）
 
-| 类型 | 文件路径 | 说明 |
-|------|----------|------|
-| `GameData` | `savegame.dat` | 游戏进度数据 |
-| `ResourceData` | `resources.dat` | 资源数据 |
-| `Settings` | `settings.json` | 游戏设置 |
-| `PlayerStats` | `playerstats.dat` | 玩家统计数据 |
+---
 
-### 存档数据结构
+## 4. BuffManager — Buff系统
+
+### Buff类型
+
+| Buff | 效果 | 默认持续 | 来源 |
+|------|------|:---:|------|
+| **穿透** | 子弹穿透数+2 | 15s | 掉落/商店 |
+| **加时间** | 限时+30秒 | 即时 | 掉落/商店 |
+| **双倍得分** | 所有得分×2 | 20s | 掉落/商店 |
+| **射速提升** | 射速×1.5 | 20s | 掉落 |
+| **伤害提升** | 伤害×1.5 | 15s | 掉落 |
+| **冰冻** | 鱼群减速50% | 10s | 掉落/商店 |
+| **磁铁** | 自动吸取掉落 | 25s | 商店 |
+
+### 获取方式
+
+| 方式 | 说明 |
+|------|------|
+| **击杀掉落** | 8%概率掉落随机临时Buff |
+| **商店常驻** | 消耗分数购买，持续整关 |
+| **商店临时** | 消耗分数购买，定时生效 |
+| **黄金鱼抽奖** | 击杀黄金鱼触发轮盘 |
+
+### Buff叠加规则
+
+- 同类型Buff: 时间叠加（取最长），效果取最强
+- 不同类型Buff: 可同时生效
+- 双倍得分 + 伤害提升: 乘法叠加
+
+### 接口
 
 ```csharp
-/// <summary>
-/// 存档数据 (主容器)
-/// </summary>
-[System.Serializable]
-public class SaveData
-{
-    public string version;              // 存档版本
-    public string saveDate;             // 保存日期
-    public string playTime;             // 游戏时长
+public void ActivateBuff(BuffType type, float duration, bool permanent = false);
+public void DeactivateBuff(BuffType type);
+public bool HasBuff(BuffType type);
+public float GetBuffMultiplier(BuffType type);
 
-    public GameProgressData gameProgress;
-    public ResourceData resources;
-    public PlayerStatsData playerStats;
-    public LevelProgressData levelProgress;
-}
-
-/// <summary>
-/// 游戏进度数据
-/// </summary>
-[System.Serializable]
-public class GameProgressData
-{
-    public string currentLevel;
-    public int currentWave;
-    public int difficulty;              // 难度等级
-    public bool isNewGame;
-    public string checkpointId;
-    public Dictionary<string, bool> unlockedLevels;
-}
-
-/// <summary>
-/// 设置数据
-/// </summary>
-[System.Serializable]
-public class SettingsData
-{
-    // 显示设置
-    public int resolutionIndex;
-    public int qualityLevel;
-    public bool fullscreen;
-    public float brightness;
-
-    // 音频设置
-    public float masterVolume;
-    public float bgmVolume;
-    public float sfxVolume;
-
-    // 游戏设置
-    public float mouseSensitivity;
-    public bool invertY;
-    public int difficulty;
-    public string language;
-}
+public event Action<BuffType, bool> OnBuffChanged;
 ```
 
-### 存档管理接口
+---
+
+## 5. LevelManager — 关卡管理
+
+### 关卡配置
+
+| 关卡 | 球半径 | 鱼数 | 鱼类型 | 门槛 | 限时 | BOSS |
+|:---:|:---:|:---:|------|:---:|:---:|:---:|
+| 1 | 10 | 25 | 普通鱼 | 500 | 120s | — |
+| 2 | 12 | 30 | +快速鱼 | 1200 | 150s | — |
+| 3 | 15 | 35 | +飞鱼 | 2500 | 180s | — |
+| 4 | 18 | 40 | +坦克鱼 | 4000 | 200s | — |
+| 5 | 20 | 50 | 全类型 | 6000 | 240s | BOSS |
+| 6-9 | 22-28 | 55-70 | 全类型混出 | 渐进 | 渐进 | — |
+| 10 | 30 | 80 | 全类型 | 35000 | 360s | 最终BOSS |
+
+### 接口
 
 ```csharp
-/// <summary>
-/// 保存游戏
-/// </summary>
-public static void SaveGame(SaveData data, string slot = "0")
+public int CurrentLevel { get; }
+public LevelConfig GetCurrentLevelConfig();
+public void StartLevel(int level);
+public bool CheckLevelComplete();  // 时间到+分数达标
+public void AdvanceToNextLevel();
+```
 
-/// <summary>
-/// 加载游戏
-/// </summary>
-public static SaveData LoadGame(string slot = "0")
+---
 
-/// <summary>
-/// 检查存档是否存在
-/// </summary>
-public static bool HasSaveFile(string slot = "0")
+## 6. SaveSystem — 存档
 
-/// <summary>
-/// 删除存档
-/// </summary>
-public static void DeleteSave(string slot = "0")
+### 存档内容
 
-/// <summary>
-/// 获取所有存档槽信息
-/// </summary>
-public static SaveSlotInfo[] GetAllSaveSlots()
+| 数据 | 说明 |
+|------|------|
+| 已解锁子弹类型 | 永久解锁记录 |
+| 子弹升级等级 | 伤害/速度/大小 |
+| 炮台升级等级 | 移速/射程/射速/多发射击 |
+| 最高通关关卡 | 解锁跳关 |
+| 设置 | 音量/画面 |
 
-/// <summary>
-/// 保存设置
-/// </summary>
-public static void SaveSettings(SettingsData settings)
+存档使用 JSON 序列化，路径: `Application.persistentDataPath/`
 
-/// <summary>
-/// 加载设置
-/// </summary>
-public static SettingsData LoadSettings()
+---
+
+## 数据流
+
+```
+LevelManager (关卡配置)
+      │
+      ├──→ SphereSurface.radius
+      ├──→ EnemySpawnManager (鱼群配置)
+      └──→ TimerSystem (倒计时)
+                │
+                ▼
+          ┌── 时间到 ──→ CheckScore()
+          │                │
+          │           ┌────┴────┐
+          │       达标(Buff)  未达标
+          │           │         │
+          │       下一关    GameOver
+          │
+Turret → 射击 → Bullet → 鱼
+  │         │        │
+  │    ScoreManager   │
+  │    (扣分检查)     │
+  │         │         │
+  │         └────┬────┘
+  │              │
+  ▼              ▼
+ShopUI ←── ScoreManager (加分+掉落)
+  │              │
+  │              ▼
+  │         BuffManager
+  │              │
+  └──────┬───────┘
+         │
+    GameManager (状态控制)
 ```
 
 ## 依赖关系
 
 ```
 GameSystem
+├── ScoreManager
+│   └── SaveSystem (解锁永久化)
+├── TimerSystem
+│   └── BuffManager (时间Buff)
+├── BuffManager
+│   └── TurretSystem / BulletSystem (效果施加)
+├── LevelManager
+│   ├── TimerSystem
+│   └── ScoreManager
 ├── SaveSystem
-│   ├── File I/O (Unity/Mono)
-│   └── JsonUtility (Serialization)
-├── ResourceManager
-│   ├── SaveSystem (持久化)
-│   └── GameManager (游戏状态)
-├── GameManager
-│   ├── EnemySystem (敌人生成)
-│   ├── ResourceManager (资源)
-│   ├── SaveSystem (存档)
-│   └── AudioManager (音乐)
-└── DropManager
-    ├── ResourceManager (添加资源)
-    └── Utils/ObjectPool (对象池)
+│   └── JSON + File I/O
+└── GameManager (顶层协调)
 ```
 
 ## 测试要点
 
-1. **功能测试**: 状态机转换、资源计算、存档读写
-2. **性能测试**: 存档保存/加载速度、大数值资源处理
-3. **边界测试**: 满级经验、最大金币、多存档槽
-4. **兼容性测试**: 版本升级后的存档兼容性
-5. **异常测试**: 存档损坏恢复、磁盘满处理
+1. **功能测试**: 分数增减、消耗不足降级、倒计时归零判定、Buff叠加
+2. **性能测试**: 高频分数变动、多Buff同时生效
+3. **边界测试**: 分数恰好等于门槛、最后一秒达标、分数溢出
+
+---
+
+*对齐 GDD v3.0: 分数=资源 + 限时通关 + Buff系统*

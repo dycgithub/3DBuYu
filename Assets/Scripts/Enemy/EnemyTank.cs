@@ -1,4 +1,3 @@
-using CameraSystem;
 using EffectSystem;
 using PlayerSystem;
 using UnityEngine;
@@ -194,7 +193,7 @@ namespace EnemySystem
             EffectManager.Instance?.PlayEffect("GroundSlam", transform.position);
 
             // 摄像机震动
-            CameraShake.Instance?.Shake(0.3f, 0.5f);
+            //TODO: CameraShake.Instance?.Shake(0.3f, 0.5f);
         }
 
         public override void TakeDamage(float damage)
@@ -234,7 +233,7 @@ namespace EnemySystem
 
             // 大爆炸特效
             EffectManager.Instance?.PlayEffect("BigExplosion", transform.position);
-            CameraShake.Instance?.Shake(0.5f, 1f);
+            //TODO:CameraShake.Instance?.Shake(0.5f, 1f);
         }
 
         protected override void OnDrawGizmosSelected()
