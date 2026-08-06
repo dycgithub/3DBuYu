@@ -6,9 +6,10 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
-    path: Assets/Scenes/GameUIScene.unity
+    path: Assets/Scenes/UIScene.unity
     guid: 95264a303067a4946a205eb74b13625f
   - enabled: 1
-    path: Assets/Scenes/GameLoopScene.unity
+    path: Assets/Scenes/GameScene.unity
     guid: 9b28946fb69593a4e929a580c1e57139
   m_configObjects: {}
+  m_UseUCBPForAssetBundles: 0
