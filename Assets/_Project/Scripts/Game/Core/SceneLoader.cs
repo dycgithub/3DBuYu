@@ -1,6 +1,7 @@
 using System.Collections;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using TMPro;
 
@@ -50,7 +51,12 @@ namespace GameSystem
         public void ReturnToMainMenu()
         {
             if (string.IsNullOrEmpty(currentGameScene))
-                return;
+            {
+                if (!SceneManager.GetSceneByName(gameScene).isLoaded)
+                    return;
+
+                currentGameScene = gameScene;
+            }
 
             StartCoroutine(UnloadGameScene());
         }
@@ -58,6 +64,9 @@ namespace GameSystem
         private IEnumerator LoadSceneAdditive(string sceneName)
         {
             SetLoadingVisible(true);
+
+            var uiScene = SceneManager.GetSceneByName(mainMenuScene);
+            SetEventSystemsEnabled(uiScene, false);
 
             // 1. 附加加载战斗场景
             var op = SceneManager.LoadSceneAsync(sceneName, LoadSceneMode.Additive);
@@ -75,7 +84,6 @@ namespace GameSystem
                 yield return null;
 
             // 2. 卸载基地场景(全局容器/SceneLoader/LoadingPanel 均为 DDOL,不受影响)
-            var uiScene = SceneManager.GetSceneByName(mainMenuScene);
             if (uiScene.isLoaded)
             {
                 var unload = SceneManager.UnloadSceneAsync(uiScene);
@@ -86,29 +94,19 @@ namespace GameSystem
             SetLoadingVisible(false);
 
             currentGameScene = sceneName;
-
-            // GameManager 是场景子容器的组件,父容器解析不到,加载完成后直接场景查找
-            var gameManager = FindFirstObjectByType<GameManager>();
-            if (gameManager != null)
-                gameManager.StartLevel();
         }
 
         private IEnumerator UnloadGameScene()
         {
             SetLoadingVisible(true);
 
-            // 1. 装备结算(游戏场景尚在,GameManager 可用);库存存档由 GameManager.OnDestroy 自动完成
-            var gameManager = FindFirstObjectByType<GameManager>();
-            if (gameManager != null)
-                gameManager.SettleEquipment();
-
-            // 2. 卸载战斗场景
+            // 1. 卸载战斗场景
             var op = SceneManager.UnloadSceneAsync(currentGameScene);
             while (op != null && !op.isDone)
                 yield return null;
             currentGameScene = null;
 
-            // 3. 重新加载基地场景(Single 模式,此时无任何已加载场景)
+            // 2. 重新加载基地场景(Single 模式,此时无任何已加载场景)
             var load = SceneManager.LoadSceneAsync(mainMenuScene, LoadSceneMode.Single);
             while (load != null && !load.isDone)
                 yield return null;
@@ -131,6 +129,19 @@ namespace GameSystem
             float clamped = Mathf.Clamp01(progress / 0.9f);
             if (progressBar != null) progressBar.value = clamped;
             if (loadingText != null) loadingText.text = $"加载中... {clamped * 100f:F0}%";
+        }
+
+        private static void SetEventSystemsEnabled(Scene scene, bool enabled)
+        {
+            if (!scene.IsValid() || !scene.isLoaded) return;
+
+            var roots = scene.GetRootGameObjects();
+            for (int i = 0; i < roots.Length; i++)
+            {
+                var eventSystems = roots[i].GetComponentsInChildren<EventSystem>(true);
+                for (int j = 0; j < eventSystems.Length; j++)
+                    eventSystems[j].enabled = enabled;
+            }
         }
     }
 }

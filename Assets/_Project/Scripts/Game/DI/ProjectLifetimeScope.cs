@@ -1,33 +1,25 @@
 using GameSystem;
-using InventorySystem.Shop;
 using UnityEngine;
 using VContainer;
 using VContainer.Unity;
-using ShootingSystem;
-using ShootingSystem.Bullets;
-using ShootingSystem.Bullets.Effects;
+using CombatSystem;
 using Services;
+using Utils;
 
 /// <summary>
-/// 全局根容器,所在场景(GameUIScene)理论永不卸载,且本体 DontDestroyOnLoad 双保险。
-/// 只注册"死不了"的服务:纯 C# 单例 + DDOL 挂载的场景组件(ResourceManager/ShopManager/SceneLoader)。
+/// 全局根容器:改由 VContainerSettings.RootLifetimeScope 以 prefab 形式实例化并常驻(全工程唯一)。
+/// 只注册"死不了"的服务:纯 C# 单例 + 随根容器常驻的场景组件(ResourceManager/ShopManager/SceneLoader)。
 /// 场景组件请注册到 GameLoopLifetimeScope(子容器,每局重建)。
 /// </summary>
 public class ProjectLifetimeScope : LifetimeScope
 {
-    [Header("全局配置")]
-    [SerializeField] private TurretSystem.TurretBase turretBase;
-
-    [Header("商店经济配置(售价由商店负责)")]
-    [SerializeField] private InventorySystem.Shop.ShopConfig shopConfig;
-
-    [Header("物品表现配置(图标/UI 预制体由 UI 负责)")]
-    [SerializeField] private ItemSystem.ItemVisualConfig[] itemVisualConfigs;
-
     /// <summary>
     /// 全局根容器单例（DDOL）。未注册到 DI 的场景组件解析全局服务时使用。
     /// </summary>
     public static ProjectLifetimeScope Instance { get; private set; }
+
+    /// <summary>物品目录资产(可选):拖入后商店/存档按 id 查询使用;未配置时注册默认空目录。</summary>
+    [SerializeField] private ItemCatalog itemCatalog;
 
     protected override void Awake()
     {
@@ -47,12 +39,14 @@ public class ProjectLifetimeScope : LifetimeScope
 
         Instance = this;
 
-        // 启动场景(GameUIScene)理论上永不卸载;DDOL 为保险,防止未来场景重构时容器意外销毁
+        // 根容器由 VContainerSettings 实例化时已 DontDestroyOnLoad,此处为冗余保险,无害。
         DontDestroyOnLoad(gameObject);
     }
 
-    private new void OnDestroy()
+    protected override void OnDestroy()
     {
+        // 先让基类释放容器(DisposeCore),再清空静态引用
+        base.OnDestroy();
         if (Instance == this)
             Instance = null;
     }
@@ -60,31 +54,23 @@ public class ProjectLifetimeScope : LifetimeScope
     protected override void Configure(IContainerBuilder builder)
     {
         // === 单例服务(纯 C# 类,优先注册以便 [Inject] 可解析) ===
-        builder.Register<ItemSystem.ItemConfigRegistry>(Lifetime.Singleton).AsSelf();
-        builder.Register<InventorySystem.PlacementService>(Lifetime.Singleton).As<Interfaces.IPlacementService>().AsSelf();
-        builder.Register<_Project.UI.Common.UINotificationService>(Lifetime.Singleton).As<Services.IUINotificationService>().AsSelf();
+        builder.Register<_Project.UI.Common.UINotificationService>(Lifetime.Singleton)
+            .As<Services.IUINotificationService>().AsSelf();
+        builder.Register<GameObjectPoolService>(Lifetime.Singleton).As<IGameObjectPool>().AsSelf();
         builder.Register<TimeManager>(Lifetime.Singleton).AsSelf();
-        builder.Register<KillTimeRewardSource>(Lifetime.Singleton).As<ITimeRewardSource>().AsSelf();
-        builder.Register<ProjectileVisualPool>(Lifetime.Singleton).AsSelf();
-        builder.Register<EcsBulletSpawner>(Lifetime.Singleton).As<IBulletSpawner>().AsSelf();
-        builder.Register<BulletEventBus>(Lifetime.Singleton).As<IBulletEventBus>().AsSelf();
-        builder.Register<BulletEffectOrchestrator>(Lifetime.Singleton).AsSelf();
         builder.Register<TrajectoryPredictor>(Lifetime.Singleton).As<ITrajectorySimulationService>().AsSelf();
-
-        // === 全局数据层(玩家仓库/装备配置,跨场景跨局) ===
-        builder.RegisterInstance(turretBase);
-        builder.Register<PlayerStorage>(Lifetime.Singleton).AsSelf();
-        builder.Register<TurretSystem.PlayerLoadout>(Lifetime.Singleton).AsSelf();
-
-        // === 商店经济配置(售价查询/购买/结算共用) ===
-        builder.RegisterInstance(shopConfig);
-
-        // === 物品表现注册表(icon/uiPrefab,UI 层消费) ===
-        builder.RegisterInstance(new ItemSystem.ItemVisualRegistry(itemVisualConfigs));
-
+        builder.Register<CombatLoadout>(Lifetime.Singleton)
+            .As<IAttackModifierSource>()
+            .AsSelf();
+        builder.Register<InventoryTransferStorage>(Lifetime.Singleton)
+            .As<IInventoryTransferStorage>()
+            .AsSelf();
+        builder.Register<GrantResolver>(Lifetime.Singleton).AsSelf();
+        builder.RegisterComponentInHierarchy<InventorySystem.Shop.ShopManager>().As<IShopService>().AsSelf();
+        // === 物品目录(配置优先,默认空目录) ===
+        builder.RegisterInstance(itemCatalog != null ? itemCatalog : ItemCatalog.Default).AsSelf();
         // === DDOL 场景组件(挂在 ScopeContainer 下,永不销毁) ===
         builder.RegisterComponentInHierarchy<ResourceManager>().As<IPointsService>().AsSelf();
-        builder.RegisterComponentInHierarchy<ShopManager>().AsSelf();
 
         // === 启动场景组件 ===
         builder.RegisterComponentInHierarchy<SceneLoader>().AsSelf();

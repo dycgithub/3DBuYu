@@ -103,13 +103,24 @@ namespace _Project.UI.Animations
             {
                 _rect.anchoredPosition = _hiddenPosition;
             }
+
+            if (_group != null)
+            {
+                _group.blocksRaycasts = false;
+                _group.interactable = false;
+            }
+
             _isVisible = false;
         }
 
         public void Show()
         {
             _activeTween?.Kill();
-            if (_group != null) _group.blocksRaycasts = true;
+            if (_group != null)
+            {
+                _group.blocksRaycasts = true;
+                _group.interactable = true;
+            }
 
             PlayShowTween();
             _isVisible = true;
@@ -143,13 +154,17 @@ namespace _Project.UI.Animations
             if (_mode == Mode.Scale)
             {
                 _activeTween = DOTween.Sequence()
-                    .Append(_rect.DOScale(Vector3.one * 0.85f, _duration * 0.7f).SetEase(_hideEase))
-                    .Join(_group != null ? _group.DOFade(0f, _duration * 0.6f) : DOTween.Sequence())
-                    .SetUpdate(true)
+                     .Append(_rect.DOScale(Vector3.one * 0.85f, _duration * 0.7f).SetEase(_hideEase))
+                     .Join(_group != null ? _group.DOFade(0f, _duration * 0.6f) : DOTween.Sequence())
+                     .SetUpdate(true)
                     .OnComplete(() =>
                     {
                         _isVisible = false;
-                        if (_group != null) _group.blocksRaycasts = false;
+                        if (_group != null)
+                        {
+                            _group.blocksRaycasts = false;
+                            _group.interactable = false;
+                        }
                     });
             }
             else
@@ -160,7 +175,11 @@ namespace _Project.UI.Animations
                     .OnComplete(() =>
                     {
                         _isVisible = false;
-                        if (_group != null) _group.blocksRaycasts = false;
+                        if (_group != null)
+                        {
+                            _group.blocksRaycasts = false;
+                            _group.interactable = false;
+                        }
                     });
             }
         }

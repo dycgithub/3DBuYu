@@ -1,54 +1,67 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Pool;
+using Utils;
+using VContainer;
+using VContainer.Unity;
 
 namespace EnemySystem.Spawning
 {
-    public class EnemyPool
+    /// <summary>敌人预制体的场景级复用入口。</summary>
+    public sealed class EnemyPool : IDisposable
     {
-        private readonly Dictionary<GameObject, ObjectPool<GameObject>> _pools = new();
-        private readonly Dictionary<GameObject, GameObject> _prefabMap = new();
+        private static readonly PoolSettings Settings = new(initialCapacity: 10, maximumRetained: 100);
+
+        private readonly IGameObjectPool _pool;
+        private readonly IObjectResolver _resolver;
+        private readonly Func<GameObject, GameObject> _instantiate;
+        private readonly HashSet<GameObject> _prefabs = new();
+
+        [Inject]
+        public EnemyPool(IGameObjectPool pool, IObjectResolver resolver)
+        {
+            _pool = pool;
+            _resolver = resolver;
+            _instantiate = InstantiateWithResolver;
+        }
 
         public GameObject Get(GameObject prefab)
         {
-            if (!_pools.TryGetValue(prefab, out var pool))
-            {
-                pool = new ObjectPool<GameObject>(
-                    createFunc: () =>
-                    {
-                        var obj = Object.Instantiate(prefab);
-                        obj.SetActive(false);
-                        return obj;
-                    },
-                    actionOnGet: null,
-                    actionOnRelease: obj => obj.SetActive(false),
-                    actionOnDestroy: Object.Destroy,
-                    collectionCheck: false,
-                    defaultCapacity: 10,
-                    maxSize: 100
-                );
-                _pools[prefab] = pool;
-            }
+            if (prefab == null)
+                return null;
 
-            var instance = pool.Get();
-            _prefabMap[instance] = prefab;
-            return instance;
+            _prefabs.Add(prefab);
+            return _pool.Rent(
+                prefab,
+                Settings,
+                activate: false,
+                factory: _instantiate);
         }
 
-        public void Release(GameObject obj)
+        private GameObject InstantiateWithResolver(GameObject prefab)
         {
-            if (!_prefabMap.TryGetValue(obj, out var prefab)) return;
-            if (!_pools.TryGetValue(prefab, out var pool)) return;
-            pool.Release(obj);
-            _prefabMap.Remove(obj);
+            return _resolver.Instantiate(prefab);
+        }
+
+        public void Release(GameObject instance)
+        {
+            if (instance == null)
+                return;
+
+            _pool.Return(instance);
         }
 
         public void Clear()
         {
-            foreach (var pool in _pools.Values)
-                pool.Clear();
-            _pools.Clear();
-            _prefabMap.Clear();
+            foreach (GameObject prefab in _prefabs)
+                _pool.Clear(prefab);
+
+            _prefabs.Clear();
+        }
+
+        public void Dispose()
+        {
+            Clear();
         }
     }
 }

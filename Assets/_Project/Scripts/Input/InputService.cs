@@ -64,6 +64,11 @@ namespace InputSystem
             return GetPortFire(portIndex).IsPressed();
         }
 
+        public bool IsKeyHeld(KeyCode key)
+        {
+            return key != KeyCode.None && UnityEngine.Input.GetKey(key);
+        }
+
         private InputAction GetPortFire(int portIndex)
         {
             if (portIndex < 0 || portIndex >= _portFireActions.Length)

@@ -1,10 +1,8 @@
 using System;
-using System.Collections.Generic;
-using R3;
 using UnityEngine;
 using VContainer;
 using Services;
-using InventorySystem;
+using CombatSystem;
 
 namespace GameSystem
 {
@@ -17,7 +15,8 @@ namespace GameSystem
         Paused
     }
 
-    public class GameManager : MonoBehaviour, Services.IGameEventService
+    /// <summary>管理单局状态，并向战斗系统提供只读的阶段门禁。</summary>
+    public class GameManager : MonoBehaviour, Services.IGameEventService, Services.ICombatPhaseService
     {
         [Header("关卡(单局)配置")]
         [SerializeField] private StageConfig stageConfig;
@@ -27,44 +26,41 @@ namespace GameSystem
         [Header("系统引用")]
         [Inject] private ResourceManager resourceManager;
 
-        [Header("玩家")]
-        [SerializeField] private GameObject playerPrefab;
-        [SerializeField] private Transform playerSpawnPoint;
-
         private readonly GameStateMachine _stateMachine = new();
         private readonly GameSession _session = new();
 
         [Inject] private TimeManager _timeManager;
-        [Inject] private TurretSystem.Turret _turret;
-        [Inject] private ITimeRewardSource _rewardSource;
+        [Inject] private IGamePauseService _pauseService;
+        [Inject] private ICombatEnergyService _energy;
+        [Inject] private Play.CentralCore centralCore;
         [Inject] private IWaveEventService _waveService;
-        [Inject] private DurabilityManager _durabilityManager;
         [Inject] private IInputService _input;
-        [Inject] private PlayerStorage _storage;
-        [Inject] private TurretSystem.PlayerLoadout _loadout;
-        [Inject] private ItemSystem.Functions.SkillManager _skillManager;
+        [Inject] private CombatLoadout _combatLoadout;
+        [Inject] private IInventoryTransferStorage _inventoryTransferStorage;
 
         private PlayerLevelManager _playerLevelManager;
         private BattlePassManager _battlePassManager;
         private GameObject _playerInstance;
-        private IDisposable _waveEndedSub;
-        private IDisposable _allWavesCompletedSub;
+        private int _lastSettlementReward;
 
         public GameState CurrentState => _stateMachine.CurrentState;
+        bool Services.ICombatPhaseService.CanPerformCombatActions
+            => _stateMachine.CurrentState == GameState.Playing;
         public int SessionPoints => _session.SessionPoints;
 
         public TimeManager Timer => _timeManager;
+        public ICombatEnergyService Energy => _energy;
         public PlayerLevelManager PlayerLevel => _playerLevelManager;
         public BattlePassManager BattlePass => _battlePassManager;
         public GameObject PlayerInstance => _playerInstance;
         public GameSession Session => _session;
         public GameStateMachine StateMachine => _stateMachine;
         public IWaveEventService WaveService => _waveService;
-        public ItemSystem.Functions.SkillManager SkillManager => _skillManager;
-        public int VictoryReward => stageConfig != null ? stageConfig.victoryRewardPoints : 0;
+        public int VictoryReward => _lastSettlementReward;
 
         public event Action<GameState, GameState> OnGameStateChanged;
         public event Action OnGameStarted;
+        public event Action<float> OnRunTimeChanged;
         public event Action<bool, int> OnSettled;
 
         event Action<int> Services.IGameEventService.EnemyKilled
@@ -89,115 +85,89 @@ namespace GameSystem
             _stateMachine.OnStateChanged += HandleStateChanged;
         }
 
-        private void SubscribeInput()
+        private void ActivateRunSubscriptions()
         {
+            // 开局可能发生在上一局结算之后；先清理旧订阅，确保每个回调至多注册一次。
+            DeactivateRunSubscriptions();
+
             if (_input != null)
                 _input.PausePressed += TogglePause;
+
+            if (_energy != null)
+                _energy.EnergyDepleted += HandleEnergyDepleted;
         }
 
-        private void UnsubscribeInput()
+        private void DeactivateRunSubscriptions()
         {
             if (_input != null)
                 _input.PausePressed -= TogglePause;
+
+            if (_energy != null)
+                _energy.EnergyDepleted -= HandleEnergyDepleted;
         }
 
         private void OnDestroy()
         {
             _stateMachine.OnStateChanged -= HandleStateChanged;
+            DeactivateRunSubscriptions();
 
             if (_playerLevelManager != null)
                 SaveSystem.SavePlayerLevelData(_playerLevelManager.GetSaveData());
             if (_battlePassManager != null)
                 SaveSystem.SaveBattlePassData(_battlePassManager.GetSaveData());
-
-            _waveEndedSub?.Dispose();
-            _allWavesCompletedSub?.Dispose();
-            SaveInventory();
         }
 
-        private void OnApplicationQuit()
-        {
-            SaveInventory();
-        }
-
-        private void SaveInventory()
-        {
-            _storage?.Save();
-            _loadout?.Save();
-        }
-
-        /// <summary>
-        /// 装备结算:战斗结束时将炮塔/炮口装备按原价折算为积分并清空装备格。
-        /// 由 SceneLoader 返回基地前调用。
-        /// 售价由商店经济配置(ShopConfig)负责。
-        /// </summary>
-        public int SettleEquipment()
-        {
-            if (_loadout == null) return 0;
-
-            var shop = ProjectLifetimeScope.Instance?.Container?.Resolve<InventorySystem.Shop.ShopConfig>();
-            int total = 0;
-
-            foreach (var p in _loadout.TurretInventory.Grid.ToSaveData())
-            {
-                var config = _loadout.TurretInventory.GetItemConfig(p.instanceId);
-                if (config != null) total += shop != null ? shop.GetBasePrice(config.itemId) : 0;
-            }
-
-            for (int i = 0; i < _loadout.PortInventories.Count; i++)
-            {
-                var inv = _loadout.PortInventories[i];
-                foreach (var p in inv.Grid.ToSaveData())
-                {
-                    var config = inv.GetItemConfig(p.instanceId);
-                    if (config != null) total += shop != null ? shop.GetBasePrice(config.itemId) : 0;
-                }
-            }
-
-            if (total > 0 && resourceManager != null)
-                resourceManager.AddPoints(total, "装备结算");
-
-            _loadout.ClearEquipment();
-
-            Debug.Log($"[GameManager] 装备结算: {total} 积分");
-            return total;
-        }
 
         private void Update()
         {
-            if (_stateMachine.CurrentState == GameState.Playing && _timeManager != null)
-            {
-                _timeManager.Tick(Time.deltaTime);
-            }
+            if (_stateMachine.CurrentState != GameState.Playing)
+                return;
+
+            float deltaTime = Time.deltaTime;
+            if (deltaTime <= 0f || float.IsNaN(deltaTime) || float.IsInfinity(deltaTime))
+                return;
+
+            // TimeManager 的剩余时间仅保留兼容显示；本局终局由能量耗尽决定。
+            _timeManager?.Tick(deltaTime);
+
+            float targetDuration = stageConfig != null ? stageConfig.timeLimit : 0f;
+            _session.AdvanceTime(deltaTime, targetDuration);
+            OnRunTimeChanged?.Invoke(_session.ElapsedTime);
+
+            if (_energy == null)
+                return;
+
+            _energy.SetCostMultiplier(_session.OvertimeMultiplier);
+            _energy.Tick(deltaTime, stageConfig != null ? stageConfig.baseEnergyDrainPerSecond : 0f);
+
+            // 事件负责即时响应，轮询用于覆盖没有经过服务入口的边界调用。
+            if (_energy.IsDepleted)
+                HandleEnergyDepleted();
+        }
+
+        private void Start()
+        {
+            StartLevel();
         }
 
         public void StartLevel()
         {
+            if (_stateMachine.CurrentState == GameState.Playing)
+                return;
+
             if (stageConfig == null)
             {
                 Debug.LogError("[GameManager] stageConfig 未配置。");
                 return;
             }
 
-            SubscribeInput();
-
-            _waveEndedSub?.Dispose();
-            _allWavesCompletedSub?.Dispose();
-            if (_waveService != null)
-            {
-                _waveEndedSub = _waveService.OnWaveEnded.Subscribe(_ => SaveInventory());
-                _allWavesCompletedSub = _waveService.OnAllWavesCompleted.Subscribe(_ => Settle());
-            }
-
+            _pauseService?.Resume();
             _session.Reset();
-            _timeManager.Initialize(stageConfig.timeLimit);
-            _timeManager.OnTimeExpired += HandleTimeExpired;
-
-            // 击杀加时配置(每点积分换算秒数)
-            if (_rewardSource is KillTimeRewardSource killSource)
-                killSource.SetSecondsPerPoint(stageConfig.killTimeRewardPerPoint);
-
-            _skillManager?.Rebuild();
+            _lastSettlementReward = 0;
+            _combatLoadout?.BeginRun();
+            _timeManager?.Initialize(stageConfig.timeLimit);
+            _energy?.Initialize(stageConfig.initialEnergy, stageConfig.maxEnergy);
+            ActivateRunSubscriptions();
 
             _stateMachine.ChangeState(GameState.Playing);
             SpawnPlayer();
@@ -208,6 +178,12 @@ namespace GameSystem
             _waveService?.StartNextWave();
 
             OnGameStarted?.Invoke();
+            OnRunTimeChanged?.Invoke(_session.ElapsedTime);
+
+            // 初始能量为 0 时不等待下一帧，立即按本局规则判定。
+            if (_energy != null && _energy.IsDepleted)
+                HandleEnergyDepleted();
+
             Debug.Log($"[GameManager] 关卡开始: 目标时长 {stageConfig.timeLimit} 秒");
         }
 
@@ -216,43 +192,62 @@ namespace GameSystem
             if (_stateMachine.CurrentState == GameState.Playing)
             {
                 _stateMachine.ChangeState(GameState.Paused);
-                _timeManager.Pause();
+                _pauseService?.Pause();
                 _waveService?.PauseWaves();
             }
             else if (_stateMachine.CurrentState == GameState.Paused)
             {
                 _stateMachine.ChangeState(GameState.Playing);
-                _timeManager.Resume();
+                _pauseService?.Resume();
                 _waveService?.ResumeWaves();
             }
         }
 
         public void Settle()
         {
+            if (_stateMachine.CurrentState is GameState.Settled or GameState.Failed)
+                return;
+
+            _lastSettlementReward = CalculateSettlementReward();
             _stateMachine.ChangeState(GameState.Settled);
+            _pauseService?.Resume();
+            DeactivateRunSubscriptions();
             _waveService?.StopWaves();
 
-            int reward = stageConfig != null ? stageConfig.victoryRewardPoints : 0;
-            if (reward > 0 && resourceManager != null)
-                resourceManager.AddPoints(reward, "胜利奖励");
+            if (_lastSettlementReward > 0)
+            {
+                resourceManager?.AddPoints(_lastSettlementReward, "本局胜利结算");
+                _playerLevelManager?.AddLifetimePoints(_lastSettlementReward);
+            }
 
+            _inventoryTransferStorage?.Clear();
+            _combatLoadout?.Clear();
             OnSettled?.Invoke(true, _session.SessionPoints);
-            Debug.Log($"[GameManager] 结算完成(胜利): 本局积分 {_session.SessionPoints}, 奖励 {reward} 积分");
+            Debug.Log(
+                $"[GameManager] 结算完成(胜利): 本局积分 {_session.SessionPoints}, " +
+                $"奖励 {_lastSettlementReward} 积分");
         }
 
         public void GameOver()
         {
-            if (_stateMachine.CurrentState == GameState.Failed) return;
+            if (_stateMachine.CurrentState is GameState.Settled or GameState.Failed)
+                return;
+
+            _lastSettlementReward = 0;
             _stateMachine.ChangeState(GameState.Failed);
+            _pauseService?.Resume();
+            DeactivateRunSubscriptions();
             _waveService?.StopWaves();
+            _inventoryTransferStorage?.Clear();
+            _combatLoadout?.Clear();
             OnSettled?.Invoke(false, _session.SessionPoints);
             Debug.Log("[GameManager] 游戏失败");
         }
 
         public void ReturnToMenu()
         {
-            _timeManager.OnTimeExpired -= HandleTimeExpired;
-            UnsubscribeInput();
+            _pauseService?.Resume();
+            DeactivateRunSubscriptions();
             CleanupGame();
             _stateMachine.ChangeState(GameState.Menu);
         }
@@ -260,7 +255,6 @@ namespace GameSystem
         private void HandleStateChanged(GameState oldState, GameState newState)
         {
             OnGameStateChanged?.Invoke(oldState, newState);
-            _durabilityManager?.SetPaused(newState != GameState.Playing);
 
             // 状态变化兜底:确保波次在非 Playing 状态下停止
             if (newState == GameState.Settled || newState == GameState.Failed || newState == GameState.Menu)
@@ -269,62 +263,55 @@ namespace GameSystem
             }
         }
 
-        private void HandleTimeExpired()
+        private void HandleEnergyDepleted()
         {
-            // 纯生存制:自然倒计时耗尽(撑过目标时长)= 胜利;时间被惩罚扣光 = 失败
-            if (_timeManager != null && _timeManager.ExpiredByPenalty)
-                GameOver();
-            else
+            if (_stateMachine.CurrentState != GameState.Playing)
+                return;
+
+            bool meetsRequirements = RunRuleMath.MeetsRunRequirements(
+                _session.ElapsedTime,
+                stageConfig != null ? stageConfig.timeLimit : 0f,
+                _session.KillCount,
+                stageConfig != null ? stageConfig.targetKillCount : 0);
+
+            if (meetsRequirements)
                 Settle();
+            else
+                GameOver();
         }
 
         private void SpawnPlayer()
         {
-            if (_turret != null)
+            if (centralCore == null)
             {
-                _playerInstance = _turret.gameObject;
-                _playerInstance.tag = "Player";
+                Debug.LogError("[GameManager] 场景玩家 Turret 未注入,请确认 GameScene 包含 PlayerContainer。", this);
                 return;
             }
 
-            var existingTurret = FindFirstObjectByType<TurretSystem.Turret>();
-            if (existingTurret != null)
-            {
-                _playerInstance = existingTurret.gameObject;
-                _playerInstance.tag = "Player";
-                return;
-            }
-
-            if (playerPrefab == null) return;
-            Vector3 pos = playerSpawnPoint != null ? playerSpawnPoint.position : Vector3.zero;
-            _playerInstance = Instantiate(playerPrefab, pos, Quaternion.identity);
+            _playerInstance = centralCore.gameObject;
             _playerInstance.tag = "Player";
         }
 
         public void OnEnemyKilled(int pointsValue)
         {
-            _session.AddPoints(pointsValue);
-            resourceManager?.AddPoints(pointsValue, "击杀敌人");
-            _playerLevelManager?.AddLifetimePoints(pointsValue);
-            _enemyKilled?.Invoke(pointsValue);
+            if (_stateMachine.CurrentState != GameState.Playing)
+                return;
 
-            if (_rewardSource != null)
-            {
-                float timeReward = _rewardSource.GetKillTimeReward(pointsValue, 0);
-                if (timeReward > 0f)
-                    _timeManager.AddTime(timeReward);
-            }
+            int scaledPoints = RunRuleMath.CalculateScaledPoints(
+                pointsValue,
+                _session.OvertimeMultiplier);
+            _session.RecordKill(scaledPoints);
+            _enemyKilled?.Invoke(scaledPoints);
         }
 
-        /// <summary>
-        /// 主动技能触发入口(命令模式 Invoker 出口,供 UI/输入/编辑器调试调用)。
-        /// </summary>
-        public bool TryExecuteSkill(int slotIndex)
+        private int CalculateSettlementReward()
         {
-            bool executed = _skillManager != null && _skillManager.Execute(slotIndex);
-            if (executed)
-                Debug.Log($"[GameManager] 释放技能: 槽位 {slotIndex}");
-            return executed;
+            float settlementMultiplier = stageConfig?.defaultDifficulty != null
+                ? stageConfig.defaultDifficulty.SettlementMultiplier
+                : 1f;
+            return RunRuleMath.CalculateSettlementReward(
+                _session.SessionPoints,
+                settlementMultiplier);
         }
 
         private void CleanupGame()

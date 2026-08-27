@@ -62,13 +62,15 @@ namespace SpatialSystem.Bridge
         #region 内部状态
 
         private SpatialGrid grid;
-        private int[] entityIdToEntryIndex;      // entityId % maxEntries -> index into grid.Entries
+        private Dictionary<int, int> entityIdToEntryIndex;  // entityId -> index into grid.Entries
         private Dictionary<int, IDamageable> entityLookup;  // entityId -> managed reference
         private int nextEntityId;
+        private bool compactionPending;
 
         // 每帧可复用的 NativeArray 查询缓冲区（避免每次查询分配）
         private NativeArray<SpatialQueryResult> queryBuffer;
         private List<IDamageable> managedResultCache;
+        private List<int> expiredEntityIds;
 
         #endregion
 
@@ -81,6 +83,9 @@ namespace SpatialSystem.Bridge
 
         private void InitializeGrid()
         {
+            if (queryBuffer.IsCreated)
+                queryBuffer.Dispose();
+
             grid.Initialize(
                 cellSize,
                 new float3(gridCenter.x, gridCenter.y, gridCenter.z),
@@ -91,20 +96,24 @@ namespace SpatialSystem.Bridge
                 Allocator.Persistent
             );
 
-            entityIdToEntryIndex = new int[maxEntries];
-            for (int i = 0; i < entityIdToEntryIndex.Length; i++)
-                entityIdToEntryIndex[i] = -1;
-
+            entityIdToEntryIndex = new Dictionary<int, int>(maxEntries);
             entityLookup = new Dictionary<int, IDamageable>(maxEntries);
             nextEntityId = 1;
+            compactionPending = false;
 
             queryBuffer = new NativeArray<SpatialQueryResult>(queryBufferSize, Allocator.Persistent);
             managedResultCache = new List<IDamageable>(64);
+            expiredEntityIds = new List<int>(64);
         }
 
         private void Update()
         {
             ValidateEntries();
+            if (compactionPending)
+            {
+                compactionPending = false;
+                CompactIfNeeded();
+            }
         }
 
         private void OnDestroy()
@@ -132,6 +141,9 @@ namespace SpatialSystem.Bridge
                 return -1;
             }
 
+            if (grid.ActiveEntryCount >= maxEntries)
+                CompactIfNeeded();
+
             int entityId = nextEntityId++;
             Vector3 pos = entity.Position;
             float3 f3pos = new float3(pos.x, pos.y, pos.z);
@@ -143,7 +155,7 @@ namespace SpatialSystem.Bridge
                 return -1;
             }
 
-            entityIdToEntryIndex[entityId % maxEntries] = entryIdx;
+            entityIdToEntryIndex[entityId] = entryIdx;
             entityLookup[entityId] = entity;
 
             return entityId;
@@ -154,16 +166,17 @@ namespace SpatialSystem.Bridge
         /// </summary>
         public void Unregister(int entityId)
         {
-            if (!entityLookup.ContainsKey(entityId)) return;
+            if (!entityLookup.Remove(entityId))
+                return;
 
-            int entryIdx = entityIdToEntryIndex[entityId % maxEntries];
-            if (entryIdx >= 0 && entryIdx < grid.ActiveEntryCount)
+            if (entityIdToEntryIndex.TryGetValue(entityId, out int entryIdx) &&
+                entryIdx >= 0 && entryIdx < grid.ActiveEntryCount)
             {
                 grid.Remove(entryIdx);
             }
 
-            entityIdToEntryIndex[entityId % maxEntries] = -1;
-            entityLookup.Remove(entityId);
+            entityIdToEntryIndex.Remove(entityId);
+            compactionPending = true;
         }
 
         /// <summary>
@@ -172,8 +185,8 @@ namespace SpatialSystem.Bridge
         /// </summary>
         public void UpdatePosition(int entityId, Vector3 newPosition)
         {
-            int entryIdx = entityIdToEntryIndex[entityId % maxEntries];
-            if (entryIdx >= 0 && entryIdx < grid.ActiveEntryCount)
+            if (entityIdToEntryIndex.TryGetValue(entityId, out int entryIdx) &&
+                entryIdx >= 0 && entryIdx < grid.ActiveEntryCount)
             {
                 float3 f3pos = new float3(newPosition.x, newPosition.y, newPosition.z);
                 grid.UpdatePosition(entryIdx, f3pos);
@@ -194,7 +207,9 @@ namespace SpatialSystem.Bridge
         /// </summary>
         public int GetEntryIndex(int entityId)
         {
-            return entityIdToEntryIndex[entityId % maxEntries];
+            return entityIdToEntryIndex.TryGetValue(entityId, out int entryIdx)
+                ? entryIdx
+                : -1;
         }
 
         #endregion
@@ -318,26 +333,17 @@ namespace SpatialSystem.Bridge
         /// </summary>
         private void ValidateEntries()
         {
-            var expiredIds = new List<int>();
+            expiredEntityIds.Clear();
 
             foreach (var kvp in entityLookup)
             {
                 var entity = kvp.Value;
                 if (entity == null || entity.Transform == null || !entity.IsAlive)
-                {
-                    expiredIds.Add(kvp.Key);
-                }
+                    expiredEntityIds.Add(kvp.Key);
             }
 
-            foreach (int id in expiredIds)
-            {
-                Unregister(id);
-            }
-
-            if (expiredIds.Count > 0)
-            {
-                CompactIfNeeded();
-            }
+            for (int index = 0; index < expiredEntityIds.Count; index++)
+                Unregister(expiredEntityIds[index]);
         }
 
         /// <summary>
@@ -346,17 +352,13 @@ namespace SpatialSystem.Bridge
         /// </summary>
         private void CompactIfNeeded()
         {
-            int deadCount = 0;
-            for (int i = 0; i < grid.ActiveEntryCount; i++)
-            {
-                if (!grid.Entries[i].IsActive) deadCount++;
-            }
+            int deadCount = grid.ActiveEntryCount - entityLookup.Count;
+            if (deadCount <= 0)
+                return;
 
-            // 如果死亡条目超过 25% 或活跃条目不足容量一半，则压缩
-            if (deadCount > grid.ActiveEntryCount * 0.25f || grid.ActiveEntryCount < maxEntries * 0.5f)
-            {
+            int compactionThreshold = Mathf.Max(16, Mathf.CeilToInt(grid.ActiveEntryCount * 0.25f));
+            if (deadCount >= compactionThreshold || grid.ActiveEntryCount >= maxEntries)
                 Compact();
-            }
         }
 
         private void Compact()
@@ -367,8 +369,8 @@ namespace SpatialSystem.Bridge
             {
                 if (kvp.Value != null && kvp.Value.IsAlive && kvp.Value.Transform != null)
                 {
-                    int entryIdx = entityIdToEntryIndex[kvp.Key % maxEntries];
-                    if (entryIdx >= 0 && entryIdx < grid.ActiveEntryCount)
+                    if (entityIdToEntryIndex.TryGetValue(kvp.Key, out int entryIdx) &&
+                        entryIdx >= 0 && entryIdx < grid.ActiveEntryCount)
                     {
                         var entry = grid.Entries[entryIdx];
                         if (entry.IsActive)
@@ -392,8 +394,9 @@ namespace SpatialSystem.Bridge
                 int entryIdx = grid.Insert(newId, f3pos, radius, mask);
                 if (entryIdx >= 0)
                 {
-                    entityIdToEntryIndex[newId % maxEntries] = entryIdx;
+                    entityIdToEntryIndex[newId] = entryIdx;
                     entityLookup[newId] = entity;
+                    nextEntityId = Mathf.Max(nextEntityId, newId + 1);
                 }
             }
         }
@@ -413,9 +416,16 @@ namespace SpatialSystem.Bridge
 #if UNITY_EDITOR
         #region Gizmos 绘制
 
+        private void OnDrawGizmos()
+        {
+            if (Application.isPlaying || !drawGridGizmos) return;
+
+            DrawEditorGridGizmos();
+        }
+
         private void OnDrawGizmosSelected()
         {
-            if (!drawGridGizmos) return;
+            if (!Application.isPlaying || !drawGridGizmos) return;
             if (!grid.Buckets.IsCreated) return;
 
             Vector3 origin = grid.GridMinV3;
@@ -429,7 +439,7 @@ namespace SpatialSystem.Bridge
             Gizmos.DrawWireCube(center, size);
 
             if (drawGridLines)
-                DrawGridGizmoLines(origin, max);
+                DrawGridGizmoLines(origin, max, grid.CellsX, grid.CellsY, grid.CellsZ);
 
             if (drawOccupiedCells)
                 DrawOccupiedGizmoCells(origin);
@@ -438,15 +448,48 @@ namespace SpatialSystem.Bridge
                 DrawEntityGizmoMarkers();
         }
 
-        private void DrawGridGizmoLines(Vector3 origin, Vector3 max)
+        private void DrawEditorGridGizmos()
+        {
+            if (cellSize <= 0f ||
+                gridDimensions.x <= 0 ||
+                gridDimensions.y <= 0 ||
+                gridDimensions.z <= 0)
+            {
+                return;
+            }
+
+            Vector3 origin = gridCenter;
+            Vector3 size = new Vector3(
+                gridDimensions.x * cellSize,
+                gridDimensions.y * cellSize,
+                gridDimensions.z * cellSize);
+            Vector3 max = origin + size;
+            Vector3 center = (origin + max) * 0.5f;
+
+            Gizmos.color = gridLineColor;
+            Gizmos.color *= 2f;
+            Gizmos.DrawWireCube(center, size);
+
+            if (drawGridLines)
+            {
+                DrawGridGizmoLines(
+                    origin,
+                    max,
+                    gridDimensions.x,
+                    gridDimensions.y,
+                    gridDimensions.z);
+            }
+        }
+
+        private void DrawGridGizmoLines(Vector3 origin, Vector3 max, int cellsX, int cellsY, int cellsZ)
         {
             Gizmos.color = gridLineColor;
             float cs = cellSize;
             int step = Mathf.Max(1, gizmoLineStep);
 
-            for (int iy = 0; iy <= grid.CellsY; iy += step)
+            for (int iy = 0; iy <= cellsY; iy += step)
             {
-                for (int iz = 0; iz <= grid.CellsZ; iz += step)
+                for (int iz = 0; iz <= cellsZ; iz += step)
                 {
                     Vector3 start = new Vector3(origin.x, origin.y + iy * cs, origin.z + iz * cs);
                     Vector3 end   = new Vector3(max.x,    origin.y + iy * cs, origin.z + iz * cs);
@@ -454,9 +497,9 @@ namespace SpatialSystem.Bridge
                 }
             }
 
-            for (int ix = 0; ix <= grid.CellsX; ix += step)
+            for (int ix = 0; ix <= cellsX; ix += step)
             {
-                for (int iz = 0; iz <= grid.CellsZ; iz += step)
+                for (int iz = 0; iz <= cellsZ; iz += step)
                 {
                     Vector3 start = new Vector3(origin.x + ix * cs, origin.y,          origin.z + iz * cs);
                     Vector3 end   = new Vector3(origin.x + ix * cs, max.y,             origin.z + iz * cs);
@@ -464,9 +507,9 @@ namespace SpatialSystem.Bridge
                 }
             }
 
-            for (int ix = 0; ix <= grid.CellsX; ix += step)
+            for (int ix = 0; ix <= cellsX; ix += step)
             {
-                for (int iy = 0; iy <= grid.CellsY; iy += step)
+                for (int iy = 0; iy <= cellsY; iy += step)
                 {
                     Vector3 start = new Vector3(origin.x + ix * cs, origin.y + iy * cs, origin.z);
                     Vector3 end   = new Vector3(origin.x + ix * cs, origin.y + iy * cs, max.z);

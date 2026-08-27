@@ -1,6 +1,8 @@
 using System.Collections.Generic;
+using Services;
 using UnityEngine;
 using UnityEngine.Audio;
+using VContainer;
 
 namespace GameSystem
 {
@@ -33,6 +35,7 @@ namespace GameSystem
 
         [Header("音效")]
         public int sfxPoolSize = 10;
+        [Min(1)] public int maximumSfxSourceCount = 32;
         public List<NamedAudioClip> sfxClips = new List<NamedAudioClip>();
 
         [Header("设置")]
@@ -42,11 +45,14 @@ namespace GameSystem
         [Range(0f, 1f)]
         public float pauseVolumeMultiplier = 0.3f;
 
+        [Inject] private IGamePauseService _pauseService;
+
         private AudioSource bgmSource;
-        private List<AudioSource> sfxSources = new List<AudioSource>();
-        private Queue<AudioSource> sfxPool = new Queue<AudioSource>();
+        private readonly List<AudioSource> sfxSources = new();
+        private readonly Queue<AudioSource> sfxPool = new();
+        private readonly Dictionary<AudioSource, int> sfxLeaseIds = new();
         private BGMType currentBGM = BGMType.None;
-        private Dictionary<string, AudioClip> sfxDictionary = new Dictionary<string, AudioClip>();
+        private readonly Dictionary<string, AudioClip> sfxDictionary = new();
 
         public float MasterVolume { get; private set; }
         public float BGMVolume { get; private set; }
@@ -60,6 +66,26 @@ namespace GameSystem
         private void Start()
         {
             LoadSettings();
+
+            if (_pauseService != null)
+            {
+                _pauseService.PauseStateChanged += HandlePauseStateChanged;
+                HandlePauseStateChanged(_pauseService.IsPaused);
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (_pauseService != null)
+                _pauseService.PauseStateChanged -= HandlePauseStateChanged;
+        }
+
+        private void HandlePauseStateChanged(bool isPaused)
+        {
+            if (isPaused)
+                OnGamePause();
+            else
+                OnGameResume();
         }
 
         private void Initialize()
@@ -70,8 +96,7 @@ namespace GameSystem
 
             for (int i = 0; i < sfxPoolSize; i++)
             {
-                AudioSource source = gameObject.AddComponent<AudioSource>();
-                source.playOnAwake = false;
+                AudioSource source = CreateSfxSource();
                 sfxSources.Add(source);
                 sfxPool.Enqueue(source);
             }
@@ -103,7 +128,7 @@ namespace GameSystem
             else
             {
                 bgmSource.clip = clip;
-                bgmSource.volume = BGMVolume;
+                ApplyBgmPlaybackVolume();
                 bgmSource.Play();
             }
         }
@@ -152,7 +177,7 @@ namespace GameSystem
 
             while (elapsed < bgmFadeOutTime)
             {
-                elapsed += Time.deltaTime;
+                elapsed += Time.unscaledDeltaTime;
                 bgmSource.volume = Mathf.Lerp(startVolume, 0f, elapsed / bgmFadeOutTime);
                 yield return null;
             }
@@ -164,12 +189,12 @@ namespace GameSystem
             elapsed = 0f;
             while (elapsed < bgmFadeInTime)
             {
-                elapsed += Time.deltaTime;
-                bgmSource.volume = Mathf.Lerp(0f, BGMVolume, elapsed / bgmFadeInTime);
+                elapsed += Time.unscaledDeltaTime;
+                bgmSource.volume = Mathf.Lerp(0f, GetBgmPlaybackVolume(), elapsed / bgmFadeInTime);
                 yield return null;
             }
 
-            bgmSource.volume = BGMVolume;
+            ApplyBgmPlaybackVolume();
         }
 
         private System.Collections.IEnumerator FadeOutBGM()
@@ -179,7 +204,7 @@ namespace GameSystem
 
             while (elapsed < bgmFadeOutTime)
             {
-                elapsed += Time.deltaTime;
+                elapsed += Time.unscaledDeltaTime;
                 bgmSource.volume = Mathf.Lerp(startVolume, 0f, elapsed / bgmFadeOutTime);
                 yield return null;
             }
@@ -194,12 +219,9 @@ namespace GameSystem
             AudioSource source = GetSFXSource();
             if (source == null) return;
 
-            source.clip = clip;
-            source.volume = SFXVolume * volume;
-            source.pitch = pitch;
-            source.Play();
-
-            StartCoroutine(ReturnSFXSource(source, clip.length));
+            source.transform.position = transform.position;
+            source.spatialBlend = 0f;
+            PlaySfxSource(source, clip, volume, pitch);
         }
 
         public void PlaySFXByName(string name, float volume = 1f, float pitch = 1f)
@@ -214,10 +236,16 @@ namespace GameSystem
             }
         }
 
-        public void PlaySFXAtPosition(AudioClip clip, Vector3 position, float volume = 1f)
+        public void PlaySFXAtPosition(AudioClip clip, Vector3 position, float volume = 1f, float pitch = 1f)
         {
             if (clip == null) return;
-            AudioSource.PlayClipAtPoint(clip, position, SFXVolume * volume);
+
+            AudioSource source = GetSFXSource();
+            if (source == null) return;
+
+            source.transform.position = position;
+            source.spatialBlend = 1f;
+            PlaySfxSource(source, clip, volume, pitch);
         }
 
         public void PlayRandomSFX(AudioClip[] clips, float volume = 1f)
@@ -230,33 +258,63 @@ namespace GameSystem
 
         private AudioSource GetSFXSource()
         {
-            if (sfxPool.Count > 0)
+            while (sfxPool.Count > 0)
             {
-                return sfxPool.Dequeue();
-            }
-
-            foreach (var source in sfxSources)
-            {
-                if (!source.isPlaying)
+                AudioSource source = sfxPool.Dequeue();
+                if (source != null)
                 {
                     return source;
                 }
             }
 
-            AudioSource newSource = gameObject.AddComponent<AudioSource>();
-            newSource.playOnAwake = false;
+            if (sfxSources.Count >= Mathf.Max(sfxPoolSize, maximumSfxSourceCount))
+                return null;
+
+            AudioSource newSource = CreateSfxSource();
             sfxSources.Add(newSource);
             return newSource;
         }
 
-        private System.Collections.IEnumerator ReturnSFXSource(AudioSource source, float delay)
+        private AudioSource CreateSfxSource()
         {
-            yield return new WaitForSeconds(delay);
+            AudioSource source = gameObject.AddComponent<AudioSource>();
+            source.playOnAwake = false;
+            source.spatialBlend = 0f;
+            return source;
+        }
 
-            if (!sfxPool.Contains(source))
+        private void PlaySfxSource(AudioSource source, AudioClip clip, float volume, float pitch)
+        {
+            source.Stop();
+            source.clip = clip;
+            source.volume = SFXVolume * volume;
+            source.pitch = pitch;
+            source.Play();
+
+            int leaseId = sfxLeaseIds.TryGetValue(source, out int previousLeaseId)
+                ? previousLeaseId + 1
+                : 1;
+            sfxLeaseIds[source] = leaseId;
+
+            float playbackLength = clip.length / Mathf.Max(0.01f, Mathf.Abs(pitch));
+            StartCoroutine(ReturnSFXSource(source, playbackLength, leaseId));
+        }
+
+        private System.Collections.IEnumerator ReturnSFXSource(AudioSource source, float delay, int leaseId)
+        {
+            yield return new WaitForSecondsRealtime(delay);
+
+            if (source == null ||
+                !sfxLeaseIds.TryGetValue(source, out int currentLeaseId) ||
+                currentLeaseId != leaseId)
             {
-                sfxPool.Enqueue(source);
+                yield break;
             }
+
+            source.Stop();
+            source.clip = null;
+            source.spatialBlend = 0f;
+            sfxPool.Enqueue(source);
         }
 
         public void SetMasterVolume(float volume)
@@ -269,7 +327,7 @@ namespace GameSystem
                 mainMixer.SetFloat(masterVolumeParam, db);
             }
 
-            bgmSource.volume = MasterVolume * BGMVolume;
+            ApplyBgmPlaybackVolume();
         }
 
         public void SetBGMVolume(float volume)
@@ -282,7 +340,7 @@ namespace GameSystem
                 mainMixer.SetFloat(bgmVolumeParam, db);
             }
 
-            bgmSource.volume = MasterVolume * BGMVolume;
+            ApplyBgmPlaybackVolume();
         }
 
         public void SetSFXVolume(float volume)
@@ -310,15 +368,27 @@ namespace GameSystem
 
         public void OnGamePause()
         {
-            if (lowerVolumeOnPause)
-            {
-                bgmSource.volume = BGMVolume * MasterVolume * pauseVolumeMultiplier;
-            }
+            ApplyBgmPlaybackVolume();
         }
 
         public void OnGameResume()
         {
-            bgmSource.volume = BGMVolume * MasterVolume;
+            ApplyBgmPlaybackVolume();
+        }
+
+        private void ApplyBgmPlaybackVolume()
+        {
+            if (bgmSource != null)
+                bgmSource.volume = GetBgmPlaybackVolume();
+        }
+
+        private float GetBgmPlaybackVolume()
+        {
+            float volume = MasterVolume * BGMVolume;
+            if (_pauseService != null && _pauseService.IsPaused && lowerVolumeOnPause)
+                volume *= pauseVolumeMultiplier;
+
+            return volume;
         }
 
         public void SaveSettings()

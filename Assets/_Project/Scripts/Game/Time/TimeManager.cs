@@ -1,32 +1,35 @@
 using System;
 using System.Collections.Generic;
+using R3;
 using UnityEngine;
 
 namespace GameSystem
 {
-    public class TimeManager
+    public class TimeManager : IDisposable
     {
         public float TotalTime { get; private set; }
-        public float RemainingTime { get; private set; }
-        public bool IsExpired => RemainingTime <= 0f;
-        public bool IsPaused { get; private set; }
+
+        /// <summary>剩余时间(可观察:R3,订阅即得当前值,每帧变化实时推送)。</summary>
+        public ReadOnlyReactiveProperty<float> RemainingTime => _remainingTime;
+
+        public bool IsExpired => _remainingTime.CurrentValue <= 0f;
 
         /// <summary>本次归零是否由时间惩罚导致(true = 惩罚扣光,false = 自然倒计时耗尽)。</summary>
         public bool ExpiredByPenalty { get; private set; }
 
-        public event Action<float> OnTimeChanged;
+        /// <summary>剩余时间归零时触发(一次性事件,结算/失败判定用)。</summary>
         public event Action OnTimeExpired;
 
         public float RewardMultiplier { get; set; } = 1f;
         public float PenaltyMultiplier { get; set; } = 1f;
 
+        private readonly ReactiveProperty<float> _remainingTime = new();
         private bool wasExpired;
 
         public void Initialize(float totalTime)
         {
             TotalTime = totalTime;
-            RemainingTime = totalTime;
-            IsPaused = false;
+            _remainingTime.Value = totalTime;
             wasExpired = false;
             ExpiredByPenalty = false;
         }
@@ -34,25 +37,21 @@ namespace GameSystem
         public void Reset(float totalTime)
         {
             TotalTime = totalTime;
-            RemainingTime = totalTime;
-            IsPaused = false;
+            _remainingTime.Value = totalTime;
             wasExpired = false;
             ExpiredByPenalty = false;
         }
 
         public void Tick(float deltaTime)
         {
-            if (IsPaused) return;
+            _remainingTime.Value -= deltaTime;
 
-            RemainingTime -= deltaTime;
-            OnTimeChanged?.Invoke(RemainingTime);
-
-            if (!wasExpired && RemainingTime <= 0f)
+            if (!wasExpired && _remainingTime.CurrentValue <= 0f)
             {
                 wasExpired = true;
                 ExpiredByPenalty = false;
                 TryExtendTime();
-                if (RemainingTime <= 0f)
+                if (_remainingTime.CurrentValue <= 0f)
                     OnTimeExpired?.Invoke();
             }
         }
@@ -61,38 +60,24 @@ namespace GameSystem
         {
             if (seconds <= 0f) return;
             float actual = seconds * RewardMultiplier;
-            RemainingTime += actual;
-            if (RemainingTime > 0f) wasExpired = false;
-            OnTimeChanged?.Invoke(RemainingTime);
+            _remainingTime.Value += actual;
+            if (_remainingTime.CurrentValue > 0f) wasExpired = false;
         }
 
         public void AddTimePenalty(float seconds)
         {
             if (seconds <= 0f) return;
             float actual = seconds * PenaltyMultiplier;
-            RemainingTime -= actual;
-            OnTimeChanged?.Invoke(RemainingTime);
+            _remainingTime.Value -= actual;
 
-            if (!wasExpired && RemainingTime <= 0f)
+            if (!wasExpired && _remainingTime.CurrentValue <= 0f)
             {
                 wasExpired = true;
                 ExpiredByPenalty = true;
                 TryExtendTime();
-                if (RemainingTime <= 0f)
+                if (_remainingTime.CurrentValue <= 0f)
                     OnTimeExpired?.Invoke();
             }
-        }
-
-        public void Pause()
-        {
-            IsPaused = true;
-            Time.timeScale = 0f;
-        }
-
-        public void Resume()
-        {
-            IsPaused = false;
-            Time.timeScale = 1f;
         }
 
         public void RegisterExtension(ITimeExtension extension)
@@ -113,12 +98,13 @@ namespace GameSystem
                 float extra = ext.GetExtraTime();
                 if (extra > 0f)
                 {
-                    RemainingTime += extra;
+                    _remainingTime.Value += extra;
                     wasExpired = false;
-                    OnTimeChanged?.Invoke(RemainingTime);
                     break;
                 }
             }
         }
+
+        public void Dispose() => _remainingTime.Dispose();
     }
 }

@@ -1,12 +1,12 @@
 using UnityEngine;
 using Interfaces;
-using ShootingSystem;
+using CombatSystem;
 
 namespace Services
 {
     public interface ITrajectorySimulationService
     {
-        Vector3[] Simulate(BulletProfile profile, Vector3 startPos, Vector3 startDir,
-            IDamageable target, int steps, float timeStep);
+        void Simulate(BulletProfile profile, Vector3 startPos, Vector3 startDir,
+            IDamageable target, Vector3[] points, float timeStep);
     }
 }

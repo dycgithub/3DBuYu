@@ -40,7 +40,7 @@ namespace EnemySystem.Components
         {
             if (_enemy != null && !subscribed)
             {
-                _enemy.OnPreDamage += HandlePreDamage;
+                _enemy.RegisterPreDamageInterceptor(HandlePreDamage);
                 subscribed = true;
             }
         }
@@ -49,7 +49,7 @@ namespace EnemySystem.Components
         {
             if (_enemy != null && subscribed)
             {
-                _enemy.OnPreDamage -= HandlePreDamage;
+                _enemy.UnregisterPreDamageInterceptor(HandlePreDamage);
                 subscribed = false;
             }
         }

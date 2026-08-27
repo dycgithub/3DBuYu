@@ -1,15 +1,18 @@
 using System.Collections.Generic;
-using System.Linq;
 using R3;
 using Services;
+using VContainer.Unity;
 
 namespace EnemySystem.Spawning
 {
-    public class EnemySpawner : IEnemySpawner
+    /// <summary>管理敌人生成、死亡通知和延迟对象池回收。</summary>
+    public class EnemySpawner : IEnemySpawner, ITickable
     {
         private readonly EnemyFactory _factory;
         private readonly ISpawnPositionProvider _spawnPositionProvider;
         private readonly HashSet<Enemy> _activeEnemies = new();
+        private readonly HashSet<Enemy> _pendingRelease = new();
+        private readonly List<Enemy> _iterationBuffer = new(128);
         private readonly ReactiveProperty<int> _activeEnemyCount = new(0);
 
         public int ActiveEnemyCount => _activeEnemyCount.Value;
@@ -36,22 +39,52 @@ namespace EnemySystem.Spawning
         {
             enemy.OnDied -= HandleEnemyDied;
             _activeEnemies.Remove(enemy);
-            _factory.Release(enemy);
+            // 延迟到本帧战斗效果派发结束后再回收到对象池。
+            _pendingRelease.Add(enemy);
             _activeEnemyCount.Value = _activeEnemies.Count;
+        }
+
+        public void Tick()
+        {
+            if (_pendingRelease.Count == 0)
+                return;
+
+            foreach (Enemy enemy in _pendingRelease)
+                _factory.Release(enemy);
+
+            _pendingRelease.Clear();
         }
 
         public void ClearAll()
         {
-            foreach (var enemy in _activeEnemies.ToArray())
+            Tick();
+            CopyActiveEnemies();
+            for (int index = 0; index < _iterationBuffer.Count; index++)
+            {
+                Enemy enemy = _iterationBuffer[index];
+                enemy.OnDied -= HandleEnemyDied;
                 _factory.Release(enemy);
+            }
+
+            _iterationBuffer.Clear();
             _activeEnemies.Clear();
             _activeEnemyCount.Value = 0;
         }
 
         public void KillAllEnemies()
         {
-            foreach (var enemy in _activeEnemies.ToArray())
-                enemy.Kill();
+            CopyActiveEnemies();
+            for (int index = 0; index < _iterationBuffer.Count; index++)
+                _iterationBuffer[index].Kill();
+
+            _iterationBuffer.Clear();
+        }
+
+        private void CopyActiveEnemies()
+        {
+            _iterationBuffer.Clear();
+            foreach (Enemy enemy in _activeEnemies)
+                _iterationBuffer.Add(enemy);
         }
     }
 }

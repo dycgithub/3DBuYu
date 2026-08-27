@@ -5,11 +5,11 @@ namespace _Project.UI.Common
 {
     public class UINotificationService : IUINotificationService
     {
-        public event Action<NotificationMessage> OnToastRequested;
+        public event Action<NotificationMessage> OnNotificationRequested;
 
-        public void ShowToast(string message, NotificationKind type = NotificationKind.Info)
+        public void ShowNotification(string message, NotificationKind type = NotificationKind.Info)
         {
-            OnToastRequested?.Invoke(new NotificationMessage(message, type));
+            OnNotificationRequested?.Invoke(new NotificationMessage(message, type));
         }
     }
 }

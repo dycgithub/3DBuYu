@@ -1,7 +1,6 @@
-using System.Collections.Generic;
+using Play;
 using UnityEditor;
 using UnityEngine;
-using TurretSystem;
 
 /// <summary>
 /// Turret 自定义 Editor。
@@ -10,7 +9,7 @@ using TurretSystem;
 /// - 距离标注 + 球冠底面圆周可视化
 /// - 运行时调试面板（属性只读面板 + 强制开火按钮）
 /// </summary>
-[CustomEditor(typeof(Turret))]
+[CustomEditor(typeof(CentralCore))]
 public class TurretEditor : Editor
 {
     #region 端口布局调试字段
@@ -34,7 +33,7 @@ public class TurretEditor : Editor
     {
         DrawDefaultInspector();
 
-        var turret = (Turret)target;
+        var turret = (CentralCore)target;
 
         // ── 端口布局调试（编辑模式 + 运行模式均可用） ──
         DrawPortLayoutSection(turret);
@@ -54,7 +53,7 @@ public class TurretEditor : Editor
     /// <summary>
     /// 端口布局调试区域。
     /// </summary>
-    private void DrawPortLayoutSection(Turret turret)
+    private void DrawPortLayoutSection(CentralCore centralCore)
     {
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("── 端口布局调试 ──", EditorStyles.boldLabel);
@@ -71,7 +70,7 @@ public class TurretEditor : Editor
         }
 
         // 球冠高度预览
-        if (turret.TurretBaseConfig != null)
+        if (centralCore.CentralSoConfig != null)
         {
             EditorGUILayout.Space();
             float newCapHeight = EditorGUILayout.Slider("预览球冠高度", _capHeightEdit, 0f, 10f);
@@ -90,18 +89,18 @@ public class TurretEditor : Editor
     /// <summary>
     /// 运行时调试区域。
     /// </summary>
-    private void DrawRuntimeDebugSection(Turret turret)
+    private void DrawRuntimeDebugSection(CentralCore centralCore)
     {
         EditorGUILayout.LabelField("── 运行时调试 ──", EditorStyles.boldLabel);
 
         // 属性只读面板
         EditorGUI.BeginDisabledGroup(true);
-        EditorGUILayout.FloatField("当前射程", turret.Range);
-        EditorGUILayout.FloatField("当前伤害", turret.Damage);
-        EditorGUILayout.FloatField("当前射速", turret.FireRate);
-        EditorGUILayout.IntField("端口数量", turret.PortCount);
-        EditorGUILayout.IntField("活跃端口", turret.ActivePortCount);
-        EditorGUILayout.IntField("锁定端口", turret.LockedPortCount);
+        EditorGUILayout.FloatField("当前射程", centralCore.Range);
+        EditorGUILayout.FloatField("当前伤害", centralCore.Damage);
+        EditorGUILayout.FloatField("当前射速", centralCore.FireRate);
+        EditorGUILayout.IntField("端口数量", centralCore.PortCount);
+        EditorGUILayout.IntField("活跃端口", centralCore.ActivePortCount);
+        EditorGUILayout.IntField("锁定端口", centralCore.LockedPortCount);
         EditorGUI.EndDisabledGroup();
 
         EditorGUILayout.Space();
@@ -110,38 +109,15 @@ public class TurretEditor : Editor
         EditorGUILayout.BeginHorizontal();
         if (GUILayout.Button("解锁下一端口"))
         {
-            var unlocked = turret.TryExpandPort();
+            var unlocked = centralCore.TryExpandPort();
             if (unlocked != null)
-                Debug.Log($"[TurretEditor] {turret.name}: 已解锁 {unlocked.PortId}");
+                Debug.Log($"[TurretEditor] {centralCore.name}: 已解锁 {unlocked.PortId}");
             else
-                Debug.Log($"[TurretEditor] {turret.name}: 没有可解锁的端口。");
+                Debug.Log($"[TurretEditor] {centralCore.name}: 没有可解锁的端口。");
         }
         EditorGUILayout.EndHorizontal();
 
-        // ── 端口库存预览 ──
-        if (turret.PortManager != null)
-        {
-            EditorGUILayout.Space(8);
-            EditorGUILayout.LabelField("── 端口库存预览 ──", EditorStyles.boldLabel);
-
-            if (turret.TurretInventory != null)
-            {
-                var tGrid = turret.TurretInventory.Grid;
-                EditorGUILayout.LabelField($"炮台库存 [{turret.TurretInventory.Grid.GetAllItems().Count} 件]",
-                    EditorStyles.miniBoldLabel);
-            }
-
-            int portIdx = 0;
-            foreach (var port in turret.PortManager.Ports)
-            {
-                portIdx++;
-                var pStats = port.Inventory?.Attributes;
-                string info = port.IsLocked ? "【锁定】" : "【活跃】";
-                if (pStats != null && !port.IsLocked)
-                    info += $" Dmg:{pStats.Damage:F0} Rng:{pStats.Range:F1} FR:{pStats.FireRate:F2}";
-                EditorGUILayout.LabelField($"  P{portIdx} {info}", EditorStyles.miniLabel);
-            }
-        }
+        
     }
 
     #endregion
@@ -150,11 +126,11 @@ public class TurretEditor : Editor
 
     private void OnSceneGUI()
     {
-        var turret = (Turret)target;
-        if (turret.TurretBaseConfig == null) return;
+        var turret = (CentralCore)target;
+        if (turret.CentralSoConfig == null) return;
         if (!_showPortLayout) return;
 
-        var configs = turret.TurretBaseConfig.firingPorts;
+        var configs = turret.CentralSoConfig.Transmitters;
         if (configs == null || configs.Length == 0) return;
 
         Transform turretTransform = turret.transform;
@@ -165,12 +141,12 @@ public class TurretEditor : Editor
         SphereWalker sphereWalker = turret.SphereWalker;
         bool hasSphereCenter = sphereWalker != null;
         Vector3 sphereCenter = hasSphereCenter ? sphereWalker.GetEffectiveCenter() : Vector3.zero;
-        float capHeight = hasSphereCenter ? _capHeightEdit : turret.TurretBaseConfig.capHeight;
+        float capHeight = hasSphereCenter ? _capHeightEdit : turret.CentralSoConfig.capHeight;
 
         // ── 绘制球冠底面圆周 ──
         if (_showLayoutRing && hasSphereCenter)
         {
-            Vector3[] basePoints = TurretCapLayout.GetCapBaseCircle(sphereCenter, turretPos, capHeight, 48);
+            Vector3[] basePoints = CapLayout.GetCapBaseCircle(sphereCenter, turretPos, capHeight, 48);
             Handles.color = RingColor;
             for (int i = 0; i < basePoints.Length; i++)
             {
@@ -230,7 +206,7 @@ public class TurretEditor : Editor
             {
                 if (hasSphereCenter)
                 {
-                    TurretCapLayout.CalculatePortPose(
+                    CapLayout.CalculatePortPose(
                         sphereCenter, turretPos, capHeight,
                         config.portName,
                         out worldPos);

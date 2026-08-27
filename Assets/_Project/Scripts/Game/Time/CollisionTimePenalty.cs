@@ -4,7 +4,7 @@ using GameSystem;
 using Services;
 using VContainer;
 
-namespace TurretSystem
+namespace Play
 {
     /// <summary>
     /// 碰撞时间惩罚组件。

@@ -3,11 +3,12 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using VContainer;
 
 namespace _Project.UI.Item
 {
     /// <summary>
-    /// 战斗结算面板(纯生存制):订阅 GameManager.OnSettled,
+    /// 战斗结算面板:订阅 GameManager.OnSettled,
     /// 显示 胜利/失败 + 本局积分 + 胜利奖励,并提供"返回基地"按钮。
     /// UI 全部代码自建(不依赖预制体/字体资产修改),默认隐藏。
     /// </summary>
@@ -19,14 +20,20 @@ namespace _Project.UI.Item
         private TextMeshProUGUI _infoText;
         private bool _subscribed;
 
+        [Inject] private IObjectResolver _resolver;
+        [Inject] private SceneLoader _sceneLoader;
+        private GameManager _gameManager;
+
         private void Start()
         {
             BuildUi();
 
-            var gm = FindFirstObjectByType<GameManager>();
-            if (gm != null)
+            if (_resolver != null)
+                _resolver.TryResolve(out _gameManager);
+
+            if (_gameManager != null)
             {
-                gm.OnSettled += HandleSettled;
+                _gameManager.OnSettled += HandleSettled;
                 _subscribed = true;
             }
 
@@ -36,33 +43,29 @@ namespace _Project.UI.Item
         private void OnDestroy()
         {
             if (!_subscribed) return;
-            var gm = FindFirstObjectByType<GameManager>();
-            if (gm != null)
-                gm.OnSettled -= HandleSettled;
+            if (_gameManager != null)
+                _gameManager.OnSettled -= HandleSettled;
         }
 
         private void HandleSettled(bool success, int sessionPoints)
         {
             int reward = 0;
-            var gm = FindFirstObjectByType<GameManager>();
-            if (success && gm != null)
-                reward = gm.VictoryReward;
+            if (success && _gameManager != null)
+                reward = _gameManager.VictoryReward;
 
             _titleText.text = success ? "胜 利" : "失 败";
             _titleText.color = success ? new Color(0.4f, 1f, 0.5f) : new Color(1f, 0.4f, 0.4f);
 
             _infoText.text = success
                 ? $"本局积分: {sessionPoints}\n胜利奖励: +{reward} 积分"
-                : $"本局积分: {sessionPoints}\n时间耗尽,无任何奖励";
+                : $"本局积分: {sessionPoints}\n未满足本局条件,无结算奖励";
 
             SetVisible(true);
         }
 
         private void ReturnToBase()
         {
-            var loader = FindFirstObjectByType<SceneLoader>();
-            if (loader != null)
-                loader.ReturnToMainMenu();
+            _sceneLoader?.ReturnToMainMenu();
         }
 
         private void SetVisible(bool visible)

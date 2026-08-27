@@ -1,23 +1,24 @@
 using _Project.UI.Animations;
-using _Project.UI.Inventory;
 using GameSystem;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using VContainer;
 
 namespace _Project.UI.Settings
 {
     /// <summary>
-    /// 设置面板:背包入口 + 返回基地(仅战斗场景显示)+ 关闭。
+    /// 设置面板:返回基地(仅战斗场景显示)+ 关闭。
     /// 基地与战斗场景各挂一份实例。
     /// </summary>
     public class SettingsPanel : MonoBehaviour
     {
         [SerializeField] private GameObject _panelRoot;
-        [SerializeField] private Button _inventoryButton;
         [SerializeField] private Button _returnBaseButton;
         [SerializeField] private Button _closeButton;
         [SerializeField] private UIPanelShowHide _panelTween;
+
+        [Inject] private SceneLoader _sceneLoader;
 
         private CanvasGroup _panelGroup;
 
@@ -25,9 +26,6 @@ namespace _Project.UI.Settings
         {
             if (_closeButton != null)
                 _closeButton.onClick.AddListener(Hide);
-
-            if (_inventoryButton != null)
-                _inventoryButton.onClick.AddListener(OpenInventory);
 
             if (_returnBaseButton != null)
             {
@@ -67,20 +65,12 @@ namespace _Project.UI.Settings
             group.interactable = false;
         }
 
-        private void OpenInventory()
-        {
-            Hide();
-            var inventory = FindFirstObjectByType<InventoryCompoundPanel>();
-            inventory?.SetVisible(true);
-        }
-
         private void ReturnToBase()
         {
-            var loader = FindFirstObjectByType<SceneLoader>();
-            if (loader != null)
+            if (_sceneLoader != null)
             {
                 Hide();
-                loader.ReturnToMainMenu();
+                _sceneLoader.ReturnToMainMenu();
             }
         }
 
@@ -92,3 +82,5 @@ namespace _Project.UI.Settings
         }
     }
 }
+
+

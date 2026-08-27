@@ -1,4 +1,5 @@
 using System;
+using R3;
 using UnityEngine;
 using Services;
 
@@ -13,12 +14,11 @@ namespace GameSystem
         [SerializeField] private bool autoSave = true;
         [SerializeField] private float autoSaveInterval = 60f;
 
-        private int currentPoints;
+        private readonly ReactiveProperty<int> _points = new();
         private float autoSaveTimer;
 
-        public int Points => currentPoints;
-
-        public event Action<int, int> OnPointsChanged;
+        /// <summary>当前积分(可观察:R3,订阅即得当前值,变化实时推送)。</summary>
+        public ReadOnlyReactiveProperty<int> Points => _points;
 
         private void Awake()
         {
@@ -27,16 +27,15 @@ namespace GameSystem
         private void Start()
         {
             if (!LoadData())
-                currentPoints = initialPoints;
+                _points.Value = initialPoints;
 
-            // 广播初始值,避免 UI 在 Start 顺序中读到旧值
-            OnPointsChanged?.Invoke(currentPoints, 0);
+            // R3 ReactiveProperty 订阅时立即推送当前值,无需手动广播初始值
         }
 
         private void Update()
         {
             if (!autoSave) return;
-            autoSaveTimer += Time.deltaTime;
+            autoSaveTimer += Time.unscaledDeltaTime;
             if (autoSaveTimer >= autoSaveInterval)
             {
                 SaveData();
@@ -44,32 +43,27 @@ namespace GameSystem
             }
         }
 
-        private void OnApplicationQuit()
+        private void OnDestroy()
         {
             if (autoSave) SaveData();
+            _points.Dispose();
         }
 
         public void AddPoints(int amount, string source = "")
         {
             if (amount <= 0) return;
-            int old = currentPoints;
-            currentPoints += amount;
-            int added = currentPoints - old;
-
-            OnPointsChanged?.Invoke(currentPoints, added);
+            _points.Value += amount;
         }
 
         public bool SpendPoints(int amount, string reason = "")
         {
             if (amount <= 0) return true;
-            if (currentPoints < amount) return false;
-            currentPoints -= amount;
-
-            OnPointsChanged?.Invoke(currentPoints, -amount);
+            if (_points.Value < amount) return false;
+            _points.Value -= amount;
             return true;
         }
 
-        public bool HasEnoughPoints(int amount) => currentPoints >= amount;
+        public bool HasEnoughPoints(int amount) => _points.Value >= amount;
 
         public void SaveData()
         {
@@ -80,14 +74,13 @@ namespace GameSystem
         {
             var data = SaveSystem.LoadResourceData();
             if (data == null) return false;
-            currentPoints = data.points;
+            _points.Value = data.points;
             return true;
         }
 
         public void ResetResources()
         {
-            currentPoints = initialPoints;
-            OnPointsChanged?.Invoke(currentPoints, 0);
+            _points.Value = initialPoints;
             SaveData();
         }
 
@@ -95,7 +88,7 @@ namespace GameSystem
         {
             return new ResourceSaveData
             {
-                points = currentPoints
+                points = _points.Value
             };
         }
     }

@@ -1,15 +1,6 @@
-using InventorySystem;
-using ItemSystem;
-
-namespace Interfaces
-{
-    /// <summary>
-    /// 库存物品校验策略：决定某个物品能否放入库存。
-    /// 库存的类型规则从"子类覆盖"（ValidateItem）解耦为"构造注入策略"，
-    /// 便于组合复用（如"类型为 Skill 且未过期"）。
-    /// </summary>
-    public interface IInventoryValidator
-    {
-        bool CanAccept(ItemConfig config);
-    }
-}
+// ============================================================================
+// 已删除:IInventoryValidator(库存物品校验策略)。
+// 原功能:通过构造注入的校验策略(如"类型为 Skill 且未过期")决定某物品能否
+// 放入某库存,将类型规则从子类覆盖解耦为可组合策略。
+// 归属:旧 GridInventorySystem + ItemSystem,随库存/道具系统重写移除。
+// ============================================================================

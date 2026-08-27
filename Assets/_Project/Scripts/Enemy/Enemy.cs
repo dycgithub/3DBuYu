@@ -1,11 +1,12 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using FlockingSystem;
 using Services;
 using Interfaces;
 using SpatialSystem.Bridge;
 using VContainer;
-using ShootingSystem.Buffs;
+using CombatSystem;
 using UnityEngine.Serialization;
 
 namespace EnemySystem
@@ -16,7 +17,7 @@ namespace EnemySystem
     /// 配置仅由 <see cref="EnemyAttributes"/> SO 承载(HP + Speed + 必要 flock 参数)。
     /// </summary>
     [RequireComponent(typeof(Collider))]
-    public class Enemy : MonoBehaviour, ILockable, IBuffable
+    public class Enemy : MonoBehaviour, ILockable, IBuffable, IDamageReceiver
     {
         [FormerlySerializedAs("stats")]
         [Header("基础数据")]
@@ -49,20 +50,18 @@ namespace EnemySystem
         public event Action<Enemy> OnDied;
 
         /// <summary>
-        /// 伤害前置拦截 - 组件可通过此事件修改或取消传入伤害。
-        /// 返回 false 表示完全闪避(伤害不应用);返回 true 表示继续,ref finalDamage 可被修改(如护盾吸收)。
+        /// 伤害前置拦截委托。返回 false 表示完全闪避；返回 true 表示继续处理。
         /// </summary>
-        public event EnemyDamageInterceptor OnPreDamage;
-
         public delegate bool EnemyDamageInterceptor(Enemy enemy, float originalDamage, ref float finalDamage);
 
+        private readonly List<EnemyDamageInterceptor> _preDamageInterceptors = new(2);
+
         [Inject] protected ISpatialQueryService _spatialService;
-        [Inject] protected IGameEventService _gameEventService;
         [Inject] protected IEffectService _effectService;
 
         // === IDamageable ===
         Vector3 IDamageable.Position => transform.position;
-        bool IDamageable.IsAlive => !isDead;
+        bool IDamageable.IsAlive => !isDead && gameObject.activeInHierarchy;
         Transform IDamageable.Transform => transform;
 
         // === ILockable ===
@@ -175,27 +174,85 @@ namespace EnemySystem
 
         public virtual void TakeDamage(float damage)
         {
-            if (isDead) return;
-
-            float finalDamage = damage;
-            if (OnPreDamage != null)
+            var request = new DamageRequest
             {
-                foreach (EnemyDamageInterceptor handler in OnPreDamage.GetInvocationList())
+                BaseDamage = damage,
+                DamageType = DamageType.Physical,
+                HitPoint = transform.position,
+                HitNormal = transform.position.normalized
+            };
+            ReceiveDamage(request);
+        }
+
+        public virtual DamageResult ReceiveDamage(in DamageRequest request)
+        {
+            if (isDead)
+            {
+                return new DamageResult
                 {
-                    if (!handler(this, damage, ref finalDamage))
-                        return; // 闪避
+                    Outcome = DamageOutcome.Invalid,
+                    RemainingHealth = CurrentHealth
+                };
+            }
+
+            float finalDamage = Mathf.Max(0f, request.BaseDamage);
+            for (int index = 0; index < _preDamageInterceptors.Count; index++)
+            {
+                EnemyDamageInterceptor interceptor = _preDamageInterceptors[index];
+                if (!interceptor(this, request.BaseDamage, ref finalDamage))
+                {
+                    return new DamageResult
+                    {
+                        Outcome = DamageOutcome.Dodged,
+                        RemainingHealth = CurrentHealth
+                    };
                 }
             }
 
             float buffMultiplier = _buffController != null ? _buffController.GetModifier(BuffType.DamageTakenMultiplier) : 1f;
-            float effectiveDamage = finalDamage * buffMultiplier;
+            float effectiveDamage = Mathf.Max(0f, finalDamage * buffMultiplier);
+            if (effectiveDamage <= 0f)
+            {
+                return new DamageResult
+                {
+                    Outcome = DamageOutcome.Blocked,
+                    RemainingHealth = CurrentHealth
+                };
+            }
+
             CurrentHealth -= effectiveDamage;
 
             _effectService?.Play("EnemyHit", transform.position);
-            OnDamageTaken(finalDamage);
+            OnDamageTaken(effectiveDamage);
 
+            bool isKill = false;
             if (CurrentHealth <= 0f)
+            {
                 Die();
+                isKill = true;
+            }
+
+            return new DamageResult
+            {
+                Outcome = isKill ? DamageOutcome.Killed : DamageOutcome.Applied,
+                ActualDamage = effectiveDamage,
+                RemainingHealth = Mathf.Max(0f, CurrentHealth),
+                IsKill = isKill
+            };
+        }
+
+        /// <summary>注册伤害前置拦截器。重复注册同一委托会被忽略。</summary>
+        public void RegisterPreDamageInterceptor(EnemyDamageInterceptor interceptor)
+        {
+            if (interceptor != null && !_preDamageInterceptors.Contains(interceptor))
+                _preDamageInterceptors.Add(interceptor);
+        }
+
+        /// <summary>注销此前注册的伤害前置拦截器。</summary>
+        public void UnregisterPreDamageInterceptor(EnemyDamageInterceptor interceptor)
+        {
+            if (interceptor != null)
+                _preDamageInterceptors.Remove(interceptor);
         }
 
         protected virtual void OnDamageTaken(float damage) { }
@@ -225,8 +282,6 @@ namespace EnemySystem
 
         protected virtual void OnDeath()
         {
-            int points = attributes != null ? attributes.pointsValue : 30;
-            _gameEventService?.NotifyEnemyKilled(points);
         }
 
         public virtual void ResetForReuse()
@@ -256,7 +311,12 @@ namespace EnemySystem
 
         public void ApplyBuff(BuffConfig config)
         {
-            _buffController?.AddBuff(config);
+            ApplyBuff(config, 0);
+        }
+
+        public void ApplyBuff(BuffConfig config, int sourceId)
+        {
+            _buffController?.AddBuff(config, sourceId);
         }
 
         #endregion

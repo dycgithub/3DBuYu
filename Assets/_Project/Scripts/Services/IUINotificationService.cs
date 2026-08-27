@@ -12,8 +12,8 @@ namespace Services
 
     public interface IUINotificationService
     {
-        void ShowToast(string message, NotificationKind type = NotificationKind.Info);
-        event Action<NotificationMessage> OnToastRequested;
+        void ShowNotification(string message, NotificationKind type = NotificationKind.Info);
+        event Action<NotificationMessage> OnNotificationRequested;
     }
 
     public struct NotificationMessage

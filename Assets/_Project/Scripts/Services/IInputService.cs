@@ -8,6 +8,7 @@ namespace Services
         Vector2 Move { get; }
         bool PausePressedThisFrame { get; }
         bool IsPortFireHeld(int portIndex);
+        bool IsKeyHeld(KeyCode key);
         int MaxPorts { get; }
         event Action PausePressed;
 

@@ -147,28 +147,6 @@ namespace GameSystem
 
         #endregion
 
-        #region 库存存档
-
-        private const string INVENTORY_FILE = "inventory.json";
-
-        /// <summary>
-        /// 保存库存数据。
-        /// </summary>
-        public static void SaveInventoryData(InventorySaveData data)
-        {
-            WriteJson(INVENTORY_FILE, data);
-        }
-
-        /// <summary>
-        /// 加载库存数据。
-        /// </summary>
-        public static InventorySaveData LoadInventoryData()
-        {
-            return ReadJson<InventorySaveData>(INVENTORY_FILE);
-        }
-
-        #endregion
-
         #region 存档管理
 
         /// <summary>
