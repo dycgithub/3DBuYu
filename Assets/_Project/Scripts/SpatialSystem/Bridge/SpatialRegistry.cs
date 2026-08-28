@@ -249,6 +249,32 @@ namespace SpatialSystem.Bridge
         }
 
         /// <summary>
+        /// 返回所有已注册的匹配实体。
+        /// 用于全体技能，避免大半径查询受到单元格遍历和结果缓冲区上限影响。
+        /// </summary>
+        public List<IDamageable> QueryAllManaged(int layerMask)
+        {
+            managedResultCache.Clear();
+
+            foreach (var pair in entityIdToEntryIndex)
+            {
+                int entryIndex = pair.Value;
+                if (entryIndex < 0 || entryIndex >= grid.ActiveEntryCount)
+                    continue;
+
+                SpatialEntry entry = grid.Entries[entryIndex];
+                if (!entry.IsActive || (entry.LayerMask & layerMask) == 0)
+                    continue;
+
+                IDamageable entity = GetEntity(pair.Key);
+                if (entity != null && entity.IsAlive && entity.Transform != null)
+                    managedResultCache.Add(entity);
+            }
+
+            return managedResultCache;
+        }
+
+        /// <summary>
         /// 最近实体查询：返回最近的匹配 IDamageable，或 null。
         /// 内部使用 Burst 编译的空间查询。
         /// </summary>
@@ -410,6 +436,9 @@ namespace SpatialSystem.Bridge
 
         List<IDamageable> ISpatialQueryService.QueryRadius(Vector3 center, float radius, int layerMask)
             => QueryRadiusManaged(center, radius, layerMask);
+
+        List<IDamageable> ISpatialQueryService.QueryAll(int layerMask)
+            => QueryAllManaged(layerMask);
 
         #endregion
 

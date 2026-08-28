@@ -43,7 +43,7 @@ public class GameLoopLifetimeScope : LifetimeScope
         builder.RegisterComponentInHierarchy<FlockManager>().AsSelf();
 
         // Per-run combat resources must be disposed with the game-loop scope.
-        builder.Register<CombatEnergyService>(Lifetime.Singleton).As<ICombatEnergyService>().AsSelf();
+        builder.Register<EnergyService>(Lifetime.Singleton).As<IEnergyService>().AsSelf();
         builder.Register<GamePauseService>(Lifetime.Singleton).As<IGamePauseService>().AsSelf();
         builder.Register<GameObjectPoolService>(Lifetime.Singleton).As<IGameObjectPool>().AsSelf();
 
@@ -60,15 +60,20 @@ public class GameLoopLifetimeScope : LifetimeScope
         builder.Register<BulletEffectDispatcher>(Lifetime.Singleton)
             .As<IBulletEffectDispatcher>()
             .AsSelf();
-        builder.Register<AttackModifierPipeline>(Lifetime.Singleton).AsSelf();
         builder.Register<UnityAttackClock>(Lifetime.Singleton).As<IAttackClock>();
         builder.Register<AttackCooldownRegistry>(Lifetime.Singleton).AsSelf();
         builder.Register<AttackBuilder>(Lifetime.Singleton).AsSelf();
         builder.Register<AttackExecutor>(Lifetime.Singleton).AsSelf();
-        builder.RegisterEntryPoint<SkillExecutor>(Lifetime.Singleton).AsSelf();
         builder.RegisterEntryPoint<ProjectileSimulationService>(Lifetime.Singleton).AsSelf();
         builder.Register<PooledBulletSpawner>(Lifetime.Singleton).As<IProjectileSpawner>().AsSelf();
-        builder.Register<TransmitterAttackCoordinator>(Lifetime.Singleton).AsSelf();
+        builder.Register<TransmitterShootBuildService>(Lifetime.Singleton).AsSelf();
+        builder.Register<TransmitterAttackService>(Lifetime.Singleton)
+            .As<ITransmitterAttackService>()
+            .AsSelf();
+        builder.RegisterEntryPoint<AbilityService>(Lifetime.Singleton).AsSelf();
+        builder.RegisterEntryPoint<CombatInventoryBinder>(Lifetime.Singleton)
+            .As<ICombatItemConsumer>()
+            .AsSelf();
 
         // === 敌人(纯 C# 服务,依赖上面的场景组件,故放子容器) ===
         builder.Register<EnemyPool>(Lifetime.Singleton).AsSelf();

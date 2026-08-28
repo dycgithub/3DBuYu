@@ -59,13 +59,16 @@ public class ProjectLifetimeScope : LifetimeScope
         builder.Register<GameObjectPoolService>(Lifetime.Singleton).As<IGameObjectPool>().AsSelf();
         builder.Register<TimeManager>(Lifetime.Singleton).AsSelf();
         builder.Register<TrajectoryPredictor>(Lifetime.Singleton).As<ITrajectorySimulationService>().AsSelf();
-        builder.Register<CombatLoadout>(Lifetime.Singleton)
-            .As<IAttackModifierSource>()
+        builder.Register<ItemCombatCatalog>(Lifetime.Singleton).AsSelf();
+        builder.Register<SkillHand>(Lifetime.Singleton).AsSelf();
+        builder.Register<SkillTargetPointer>(Lifetime.Singleton).AsSelf();
+        builder.Register<CentralLoadout>(Lifetime.Singleton).AsSelf();
+        builder.Register<TransmitterLoadout>(Lifetime.Singleton)
+            .As<ITransmitterShootModifierSource>()
             .AsSelf();
         builder.Register<InventoryTransferStorage>(Lifetime.Singleton)
             .As<IInventoryTransferStorage>()
             .AsSelf();
-        builder.Register<GrantResolver>(Lifetime.Singleton).AsSelf();
         builder.RegisterComponentInHierarchy<InventorySystem.Shop.ShopManager>().As<IShopService>().AsSelf();
         // === 物品目录(配置优先,默认空目录) ===
         builder.RegisterInstance(itemCatalog != null ? itemCatalog : ItemCatalog.Default).AsSelf();

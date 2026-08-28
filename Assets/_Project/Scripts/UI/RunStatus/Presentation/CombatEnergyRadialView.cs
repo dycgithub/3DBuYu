@@ -16,7 +16,7 @@ namespace _Project.UI.RunStatus
     {
         [SerializeField] private Slider _slider;
 
-        [Inject] private ICombatEnergyService _energy;
+        [Inject] private IEnergyService _energy;
         [Inject] private GameManager _gameManager;
 
         private IDisposable _energySubscription;

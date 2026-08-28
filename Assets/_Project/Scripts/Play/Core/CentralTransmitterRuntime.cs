@@ -17,6 +17,8 @@ namespace Play
 
         public TransmitterSO So { get; }
         public int PortIndex { get; }
+        public int TransmitterIndex => PortIndex;
+        public string TransmitterId { get; }
         public string PortId { get; }
         public Transform FirePoint { get; private set; }
         public TransmitterAttributes Attributes { get; }
@@ -34,7 +36,8 @@ namespace Play
                 throw new ArgumentNullException(nameof(parent));
 
             PortIndex = index;
-            PortId = $"{parent.name}_Port{index}_{so.portName}";
+            TransmitterId = string.IsNullOrWhiteSpace(so.portName) ? $"Transmitter_{index}" : so.portName;
+            PortId = $"{parent.name}_Transmitter{index}_{TransmitterId}";
             _resolver = resolver;
             IsLocked = so.isInitiallyLocked;
 

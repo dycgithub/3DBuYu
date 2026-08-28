@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Services;
 using Unity.VisualScripting;
@@ -9,6 +10,12 @@ using VContainer.Unity;
 [RequireComponent(typeof(GridInteract))]
 public class GridView : MonoBehaviour
 {
+    private static readonly List<GridView> _activeGrids = new();
+
+    public static IReadOnlyList<GridView> ActiveGrids => _activeGrids;
+    public static event Action<GridView> Registered;
+    public static event Action<GridView> Unregistered;
+
     [Header("网格")] 
     [SerializeField] private int width = 5;
     [SerializeField] private int height = 5;
@@ -23,12 +30,15 @@ public class GridView : MonoBehaviour
     [SerializeField] private Color cellColor=new Color(0.75f,0.85f,1f);
     [SerializeField] private InventoryPlacementConfig placementConfig;
     [SerializeField] private ItemShapeSet shapeSet;
+    [Header("战斗绑定")]
+    [SerializeField] private string transmitterId;
     private InventoryHighLight highlight;
     
     /// <summary>网格数据(VM),所有判定都走这里。</summary>
     public GridVM GridVM { get; private set; }
     /// <summary>网格分类(Shop/Storage/Equipment)。</summary>
     public GridType GridType => gridType;
+    public string TransmitterId => transmitterId;
     /// <summary>网格内物品数量(数据层,去重:一个物品占多格只计一次)。</summary>
     public int ItemCount => GridVM != null ? GridVM.ItemCount : 0;
     /// <summary>网格内全部物品(去重)。</summary>
@@ -49,9 +59,26 @@ public class GridView : MonoBehaviour
     /// <summary>形状库(优先场景资产,未配置用全局默认库)。</summary>
     public ItemShapeSet ShapeSet => shapeSet != null ? shapeSet : ItemShapeSet.Default;
 
+    public event Action<GridView> ItemsChanged;
+
     [Inject] private IObjectResolver _resolver;
     [Inject] private IShopService _shop;
     [Inject] private IInventoryTransferStorage _inventoryTransferStorage;
+
+    private void OnEnable()
+    {
+        if (_activeGrids.Contains(this))
+            return;
+        _activeGrids.Add(this);
+        Registered?.Invoke(this);
+    }
+
+    private void OnDisable()
+    {
+        if (!_activeGrids.Remove(this))
+            return;
+        Unregistered?.Invoke(this);
+    }
 
     private void Start()
     {
@@ -199,6 +226,7 @@ public class GridView : MonoBehaviour
         
         GridVM.Place(view.ItemVM, col, row);
         view.PlaceAt(col, row);
+        ItemsChanged?.Invoke(this);
         return true;
     }
 
@@ -222,6 +250,7 @@ public class GridView : MonoBehaviour
             if (_resolver != null) _resolver.Inject(view);
         }
         view.Init(this, item, col, row);
+        ItemsChanged?.Invoke(this);
         return view;
     }
 
@@ -310,5 +339,39 @@ public class GridView : MonoBehaviour
             for (int i = 0; i < views.Length; i++)
                 Destroy(views[i].gameObject);
         }
+
+        ItemsChanged?.Invoke(this);
+    }
+
+    public bool RemoveItem(ItemVM item)
+    {
+        if (!DetachItem(item))
+            return false;
+
+        if (itemContainer != null)
+        {
+            ItemView[] views = itemContainer.GetComponentsInChildren<ItemView>(true);
+            for (int i = 0; i < views.Length; i++)
+            {
+                if (views[i].ItemVM != item)
+                    continue;
+
+                Destroy(views[i].gameObject);
+                break;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>暂时从数据网格移除物品，供拖拽回退或跨网格放置使用。</summary>
+    public bool DetachItem(ItemVM item)
+    {
+        if (GridVM == null || item == null || !GridVM.Contains(item))
+            return false;
+
+        GridVM.Remove(item);
+        ItemsChanged?.Invoke(this);
+        return true;
     }
 }

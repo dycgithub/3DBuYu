@@ -212,7 +212,11 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         originDir = ItemVM.Direction;
         pointerCamera = eventData.pressEventCamera;
 
-        OwnerGrid.GridVM.Remove(ItemVM);
+        if (OwnerGrid == null || !OwnerGrid.DetachItem(ItemVM))
+        {
+            isDragging = false;
+            return;
+        }
 
         var go = new GameObject("ItemGhost", typeof(Image));
         go.transform.SetParent(OwnerGrid.ItemContainer, false);

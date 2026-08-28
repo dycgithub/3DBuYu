@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 
 /// <summary>
@@ -7,8 +8,12 @@ using UnityEngine;
 /// 旋转只改数据,UI 由 View 层驱动刷新。
 public class ItemVM
 {
+    private static int _nextInstanceId;
+
     /// <summary>物品定义(null = 无定义形状,如测试窗口生成的临时物品)。</summary>
     public ItemDefinition Definition { get; }
+    /// <summary>跨 UI 场景和 Game 场景保持不变的本局实例身份。</summary>
+    public int InstanceId { get; }
 
     /// <summary>基础方向(0°)形状点集:x=列偏移, y=行偏移(向右/向下为正)。</summary>
     public IReadOnlyList<Vector2Int> BasePoints{ get; set; }
@@ -32,9 +37,11 @@ public class ItemVM
         ItemDefinition definition,
         ItemShapeSet shapeSet = null,
         Vector2Int origin = default,
-        IReadOnlyList<Vector2Int> basePoints = null)
+        IReadOnlyList<Vector2Int> basePoints = null,
+        int instanceId = 0)
     {
         Definition = definition;
+        InstanceId = AllocateInstanceId(instanceId);
         var points = basePoints ?? (definition != null
             ? (shapeSet ?? ItemShapeSet.Default).GetPoints(definition.Shape)
             : new List<Vector2Int>());
@@ -44,9 +51,10 @@ public class ItemVM
     }
 
     /// <summary>便捷构造:直接给形状点集(测试/无定义场景,Definition 为 null)。</summary>
-    public ItemVM(IEnumerable<Vector2Int> basePoints, Vector2Int origin = default)
+    public ItemVM(IEnumerable<Vector2Int> basePoints, Vector2Int origin = default, int instanceId = 0)
     {
         Definition = null;
+        InstanceId = AllocateInstanceId(instanceId);
         BasePoints = new List<Vector2Int>(basePoints ?? new List<Vector2Int>());
         LocalGridCoordinate = origin;
         ApplyDirection(Dir.Down);
@@ -63,5 +71,23 @@ public class ItemVM
         CoordinateSet=rotated;
         (Width, Height) = GridUtilities.RotationHelper.GetBoundaryBox(rotated);
         RotationOffset=GridUtilities.RotationHelper.GetRotationOffset(dir,Width,Height);
+    }
+
+    private static int AllocateInstanceId(int requestedId)
+    {
+        if (requestedId > 0)
+        {
+            int current = Volatile.Read(ref _nextInstanceId);
+            while (current < requestedId)
+            {
+                int previous = Interlocked.CompareExchange(ref _nextInstanceId, requestedId, current);
+                if (previous == current)
+                    break;
+                current = previous;
+            }
+            return requestedId;
+        }
+
+        return Interlocked.Increment(ref _nextInstanceId);
     }
 }

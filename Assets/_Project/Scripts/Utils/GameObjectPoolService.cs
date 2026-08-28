@@ -178,7 +178,14 @@ namespace Utils
                 _entriesByInstanceId.Remove(entry.InstanceId);
                 _rentedInstanceIds.Remove(entry.InstanceId);
                 if (entry.Instance != null)
-                    UnityEngine.Object.Destroy(entry.Instance);
+                {
+#if UNITY_EDITOR
+                    if (!Application.isPlaying)
+                        UnityEngine.Object.DestroyImmediate(entry.Instance);
+                    else
+#endif
+                        UnityEngine.Object.Destroy(entry.Instance);
+                }
             }
 
             bucket.Available.Clear();

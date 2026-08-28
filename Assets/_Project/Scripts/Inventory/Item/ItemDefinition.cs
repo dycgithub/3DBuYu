@@ -24,8 +24,8 @@ public class ItemDefinition : ScriptableObject
     [Header("商店价格")]
     [SerializeField] private int price;
 
-    [Header("战斗授予")]
-    [SerializeField] private CombatItemGrant combatGrant;
+    [Header("战斗配置")]
+    [SerializeField] private CombatSystem.ItemCombatDefinition combatDefinition;
 
     public string Id => id;
     public string DisplayName => displayName;
@@ -36,7 +36,7 @@ public class ItemDefinition : ScriptableObject
 
     /// <summary>商店售价(积分,Points)。0 = 免费商品。</summary>
     public int Price => price;
-    public CombatItemGrant CombatGrant => combatGrant;
+    public CombatSystem.ItemCombatDefinition CombatDefinition => combatDefinition;
 
     /// <summary>
     /// 运行时创建临时定义:测试窗口 / 商店程序化生成 / 无资产环境使用。

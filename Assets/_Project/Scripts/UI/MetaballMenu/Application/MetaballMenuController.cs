@@ -30,7 +30,7 @@ namespace _Project.UI.MetaballMenu
         [SerializeField] private UIPanelShowHide _backpackPanel;
 
         [Inject] private IInputService _input;
-        [Inject] private ICombatEnergyService _energy;
+        [Inject] private IEnergyService _energy;
         [Inject] private ICombatPhaseService _combatPhase;
 
         private IDisposable _energySubscription;

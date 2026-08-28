@@ -8,7 +8,7 @@ using VContainer;
 namespace Play
 {
     /// <summary>
-    /// 把端口输入和自动目标转交给集中式攻击协调器。
+    /// 把发射器输入和自动目标转交给集中式射击服务。
     /// 端口 FirePoint 和探测器只在初始化时绑定，避免控制器对炮台内部结构进行写入。
     /// </summary>
     public class TransmitterFireController : MonoBehaviour
@@ -25,7 +25,7 @@ namespace Play
         private Transform[] _firePoints;
         private bool _initialized;
 
-        [Inject] private TransmitterAttackCoordinator _attackCoordinator;
+        [Inject] private ITransmitterAttackService _attackService;
         [Inject] private IInputService _input;
 
         public BulletProfile BulletProfile => bulletProfile;
@@ -64,7 +64,7 @@ namespace Play
             if (!_initialized)
                 return;
 
-            if (_attackCoordinator == null || _centralCore == null || _firePoints == null)
+            if (_attackService == null || _centralCore == null || _firePoints == null)
                 return;
 
             int maxPorts = Mathf.Min(_firePoints.Length, _centralCore.PortCount);
@@ -119,7 +119,7 @@ namespace Play
                     ? port.So.defaultBullet
                     : bulletProfile;
 
-                var context = new PortAttackContext(
+                var context = new TransmitterAttackInput(
                     _centralCore.GetInstanceID(),
                     portIndex,
                     profile,
@@ -133,7 +133,7 @@ namespace Play
                     criticalChance,
                     criticalDamage);
 
-                _attackCoordinator.TryExecute(in context);
+                _attackService.TryExecute(in context);
             }
         }
 

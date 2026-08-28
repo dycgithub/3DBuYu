@@ -4,12 +4,12 @@ using Services;
 
 public class RunEnergyAndSettlementTests
 {
-    private CombatEnergyService _energy;
+    private EnergyService _energy;
 
     [SetUp]
     public void SetUp()
     {
-        _energy = new CombatEnergyService();
+        _energy = new EnergyService();
     }
 
     [TearDown]

@@ -19,7 +19,7 @@ namespace EnemySystem.Components
         [Tooltip("敌人死亡时提供的基础 points，由 GameManager 按超时倍率计入本局。")]
         [SerializeField, Min(0)] private int pointsReward;
 
-        [Inject] private ICombatEnergyService _energy;
+        [Inject] private IEnergyService _energy;
         [Inject] private IGameEventService _gameEventService;
         [Inject] private ICombatPhaseService _combatPhase;
 

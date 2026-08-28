@@ -31,11 +31,12 @@ namespace GameSystem
 
         [Inject] private TimeManager _timeManager;
         [Inject] private IGamePauseService _pauseService;
-        [Inject] private ICombatEnergyService _energy;
+        [Inject] private IEnergyService _energy;
         [Inject] private Play.CentralCore centralCore;
         [Inject] private IWaveEventService _waveService;
         [Inject] private IInputService _input;
-        [Inject] private CombatLoadout _combatLoadout;
+        [Inject] private CentralLoadout _centralLoadout;
+        [Inject] private TransmitterLoadout _transmitterLoadout;
         [Inject] private IInventoryTransferStorage _inventoryTransferStorage;
 
         private PlayerLevelManager _playerLevelManager;
@@ -49,7 +50,7 @@ namespace GameSystem
         public int SessionPoints => _session.SessionPoints;
 
         public TimeManager Timer => _timeManager;
-        public ICombatEnergyService Energy => _energy;
+        public IEnergyService Energy => _energy;
         public PlayerLevelManager PlayerLevel => _playerLevelManager;
         public BattlePassManager BattlePass => _battlePassManager;
         public GameObject PlayerInstance => _playerInstance;
@@ -164,7 +165,8 @@ namespace GameSystem
             _pauseService?.Resume();
             _session.Reset();
             _lastSettlementReward = 0;
-            _combatLoadout?.BeginRun();
+            _centralLoadout?.BeginRun();
+            _transmitterLoadout?.BeginRun();
             _timeManager?.Initialize(stageConfig.timeLimit);
             _energy?.Initialize(stageConfig.initialEnergy, stageConfig.maxEnergy);
             ActivateRunSubscriptions();
@@ -221,7 +223,8 @@ namespace GameSystem
             }
 
             _inventoryTransferStorage?.Clear();
-            _combatLoadout?.Clear();
+            _centralLoadout?.Clear();
+            _transmitterLoadout?.Clear();
             OnSettled?.Invoke(true, _session.SessionPoints);
             Debug.Log(
                 $"[GameManager] 结算完成(胜利): 本局积分 {_session.SessionPoints}, " +
@@ -239,7 +242,8 @@ namespace GameSystem
             DeactivateRunSubscriptions();
             _waveService?.StopWaves();
             _inventoryTransferStorage?.Clear();
-            _combatLoadout?.Clear();
+            _centralLoadout?.Clear();
+            _transmitterLoadout?.Clear();
             OnSettled?.Invoke(false, _session.SessionPoints);
             Debug.Log("[GameManager] 游戏失败");
         }

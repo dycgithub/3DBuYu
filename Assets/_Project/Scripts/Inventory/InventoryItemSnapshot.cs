@@ -11,6 +11,7 @@ public sealed class InventoryItemSnapshot
     private readonly IReadOnlyList<Vector2Int> _basePoints;
 
     public ItemDefinition Definition { get; }
+    public int InstanceId { get; }
     public IReadOnlyList<Vector2Int> BasePoints => _basePoints;
     public Dir Direction { get; }
     public Vector2Int LocalGridCoordinate { get; }
@@ -21,6 +22,7 @@ public sealed class InventoryItemSnapshot
             throw new ArgumentNullException(nameof(source));
 
         Definition = source.Definition;
+        InstanceId = source.InstanceId;
         _basePoints = new List<Vector2Int>(source.BasePoints ?? Array.Empty<Vector2Int>()).AsReadOnly();
         Direction = source.Direction;
         LocalGridCoordinate = source.LocalGridCoordinate;
@@ -32,7 +34,8 @@ public sealed class InventoryItemSnapshot
         var item = new ItemVM(
             Definition,
             origin: LocalGridCoordinate,
-            basePoints: _basePoints);
+            basePoints: _basePoints,
+            instanceId: InstanceId);
         item.SetDirection(Direction);
         return item;
     }

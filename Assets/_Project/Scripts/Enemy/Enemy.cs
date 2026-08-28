@@ -309,12 +309,12 @@ namespace EnemySystem
 
         #region IBuffable
 
-        public void ApplyBuff(BuffConfig config)
+        public void ApplyBuff(BuffDefinition config)
         {
             ApplyBuff(config, 0);
         }
 
-        public void ApplyBuff(BuffConfig config, int sourceId)
+        public void ApplyBuff(BuffDefinition config, int sourceId)
         {
             _buffController?.AddBuff(config, sourceId);
         }

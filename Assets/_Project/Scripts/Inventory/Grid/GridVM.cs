@@ -84,4 +84,6 @@ public class GridVM
 
     /// <summary>查询某个格子被哪个物品占用(等价于索引器,语义更直白)。</summary>
     public ItemVM GetOccupant(int col, int row) => _cells[col, row];
+
+    public bool Contains(ItemVM item) => item != null && _occupants.Contains(item);
 }

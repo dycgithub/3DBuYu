@@ -25,5 +25,8 @@ namespace Services
 
         /// <summary>查询范围内的所有匹配实体。</summary>
         List<IDamageable> QueryRadius(Vector3 center, float radius, int layerMask);
+
+        /// <summary>查询所有已注册且匹配层级的实体，不受空间网格范围和结果缓冲区限制。</summary>
+        List<IDamageable> QueryAll(int layerMask);
     }
 }
