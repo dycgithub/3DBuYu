@@ -1,11 +1,12 @@
 using Services;
 using UnityEngine;
+using EffectSystem;
 
 namespace CombatSystem
 {
     public abstract class BulletEffectDefinition : ScriptableObject
     {
-        public abstract void Execute(BulletEffectContext context, IPooledEffectService effectService);
+        public abstract void Execute(BulletEffectContext context, IEffectService effectService);
     }
 
     [CreateAssetMenu(menuName = "Combat/Shoot Effects/Apply Buff")]
@@ -13,7 +14,7 @@ namespace CombatSystem
     {
         public BuffDefinition Buff;
 
-        public override void Execute(BulletEffectContext context, IPooledEffectService effectService)
+        public override void Execute(BulletEffectContext context, IEffectService effectService)
         {
             if (Buff == null || context.IsKill || context.TargetObject == null)
                 return;
@@ -25,13 +26,12 @@ namespace CombatSystem
     [CreateAssetMenu(menuName = "Combat/Shoot Effects/Play VFX")]
     public sealed class PlayVfxEffectDefinition : BulletEffectDefinition
     {
-        public GameObject VfxPrefab;
+        public EffectId Effect = EffectId.None;
         public bool AttachToTarget;
-        [Min(0.01f)] public float Lifetime = 2f;
 
-        public override void Execute(BulletEffectContext context, IPooledEffectService effectService)
+        public override void Execute(BulletEffectContext context, IEffectService effectService)
         {
-            if (VfxPrefab == null || effectService == null)
+            if (Effect == EffectId.None || effectService == null)
                 return;
 
             Transform parent = null;
@@ -42,7 +42,7 @@ namespace CombatSystem
                 position = parent.position;
             }
 
-            effectService.Play(VfxPrefab, position, Quaternion.identity, Vector3.one, Lifetime, parent);
+            effectService.Play(Effect, position, parent);
         }
     }
 }

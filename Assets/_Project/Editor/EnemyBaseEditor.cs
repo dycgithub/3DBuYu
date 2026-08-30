@@ -1,7 +1,7 @@
 using UnityEditor;
 using UnityEngine;
 using EnemySystem;
-using FlockingSystem;
+using FlockingSystem.ECS;
 
 /// <summary>
 /// Enemy 自定义 Editor — 运行时血条、Flocking 状态、伤害测试按钮。
@@ -45,23 +45,14 @@ public class EnemyBaseEditor : Editor
         EditorGUILayout.LabelField($"类型: {enemy.EnemyType}");
         EditorGUILayout.LabelField($"是否死亡: {isDead}");
 
-        // FlockAgent 信息
-        var flockAgent = enemy.GetComponent<FlockAgent>();
-        if (flockAgent != null)
+        // ECS Flocking 状态
+        var flockBridge = enemy.GetComponent<EnemyFlockBridge>();
+        if (flockBridge != null)
         {
             EditorGUILayout.Space();
-            EditorGUILayout.LabelField("── Flocking ──", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField($"当前速度: {flockAgent.Speed:F1}");
-            EditorGUILayout.LabelField($"速度倍率: {flockAgent.SpeedMultiplier:F2}");
-            EditorGUILayout.LabelField($"邻居距离: {flockAgent.NeighbourDistance:F1}");
-            EditorGUILayout.LabelField($"分离距离: {flockAgent.SeparationDistance:F1}");
-
-            var manager = flockAgent.Manager;
-            if (manager != null)
-            {
-                EditorGUILayout.LabelField($"群组大小: {manager.Agents.Count}");
-                EditorGUILayout.LabelField($"群游目标: {manager.GoalPos}");
-            }
+            EditorGUILayout.LabelField("── ECS Flocking ──", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField($"ECS 接管: {flockBridge.IsEcsControlled}");
+            EditorGUILayout.LabelField($"Slot: {flockBridge.Slot}");
         }
 
         EditorGUILayout.Space();

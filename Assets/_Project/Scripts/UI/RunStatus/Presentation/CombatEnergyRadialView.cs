@@ -9,12 +9,12 @@ using VContainer;
 namespace _Project.UI.RunStatus
 {
     /// <summary>
-    /// 将本局能量绑定到一个 UGUI Slider。
-    /// 环形外观由 Slider 的 Fill Image 在 Unity Inspector 中配置，本 View 只负责数值同步。
+    /// 将本局能量绑定到一个 UGUI 环形 Image。
+    /// 环形 Image 的填充量由本 View 直接同步，避免依赖 Slider 的矩形 Fill 行为。
     /// </summary>
     public sealed class CombatEnergyRadialView : MonoBehaviour
     {
-        [SerializeField] private Slider _slider;
+        [SerializeField] private Image _fillImage;
 
         [Inject] private IEnergyService _energy;
         [Inject] private GameManager _gameManager;
@@ -24,23 +24,24 @@ namespace _Project.UI.RunStatus
 
         private void Awake()
         {
-            if (_slider == null)
-                _slider = GetComponent<Slider>();
+            if (_fillImage == null)
+                _fillImage = GetComponent<Image>();
         }
 
         private void Start()
         {
-            if (_slider == null)
+            if (_fillImage == null)
             {
-                Debug.LogWarning("[CombatEnergyRadialView] 未绑定 Slider。", this);
+                Debug.LogWarning("[CombatEnergyRadialView] 未绑定 Image。", this);
                 return;
             }
 
-            _slider.interactable = false;
+            _fillImage.type = Image.Type.Filled;
+            _fillImage.fillMethod = Image.FillMethod.Radial360;
 
             if (_energy == null)
             {
-                Debug.LogWarning("[CombatEnergyRadialView] 未注入 ICombatEnergyService。", this);
+                Debug.LogWarning("[CombatEnergyRadialView] 未注入 IEnergyService。", this);
                 return;
             }
 
@@ -76,13 +77,18 @@ namespace _Project.UI.RunStatus
 
         private void Refresh(float currentEnergy)
         {
-            if (_slider == null || _energy == null)
+            if (_fillImage == null || _energy == null)
                 return;
 
             float maximumEnergy = NormalizeNonNegative(_energy.MaximumEnergy);
-            _slider.minValue = 0f;
-            _slider.maxValue = maximumEnergy;
-            _slider.value = Mathf.Clamp(NormalizeNonNegative(currentEnergy), 0f, maximumEnergy);
+            if (maximumEnergy <= 0f)
+            {
+                _fillImage.fillAmount = 0f;
+                return;
+            }
+
+            float normalizedEnergy = NormalizeNonNegative(currentEnergy) / maximumEnergy;
+            _fillImage.fillAmount = Mathf.Clamp01(normalizedEnergy);
         }
 
         private static float NormalizeNonNegative(float value)

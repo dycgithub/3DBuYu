@@ -4,7 +4,7 @@ namespace _Project.UI.MetaballMenu
 {
     /// <summary>
     /// 单个融球入口的运行时进度。
-    /// 进度只接受已支付能量的帧；释放按键会清零进度，但不会处理能量返还。
+    /// 进度只接受已支付能量的按住帧；释放按键后按相同速率回退，不处理能量返还。
     /// </summary>
     public sealed class MetaballFusionProgress
     {
@@ -20,7 +20,7 @@ namespace _Project.UI.MetaballMenu
         }
 
         /// <summary>
-        /// 推进一帧融合状态。
+        /// 推进一帧融合状态；按住时正向推进，释放时按相同速率反向回位。
         /// </summary>
         /// <param name="deltaTime">经过的秒数。</param>
         /// <param name="isHeld">当前按键是否仍被按住。</param>
@@ -30,7 +30,14 @@ namespace _Project.UI.MetaballMenu
         {
             if (!isHeld)
             {
-                Reset();
+                if (!float.IsNaN(deltaTime) && !float.IsInfinity(deltaTime) && deltaTime > 0f)
+                {
+                    Value = Mathf.MoveTowards(Value, 0f, deltaTime / _duration);
+                    if (Value <= 0.000001f)
+                        Value = 0f;
+                }
+
+                RequiresRelease = false;
                 return false;
             }
 

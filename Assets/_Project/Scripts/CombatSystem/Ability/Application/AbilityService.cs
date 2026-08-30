@@ -55,7 +55,7 @@ namespace CombatSystem
                 return false;
 
             IDamageable selectedTarget = _pointer?.CurrentTarget;
-            if (definition.RequiresTargetPointer && (selectedTarget == null || !selectedTarget.IsAlive))
+            if (definition.RequiresTargetPointer && !selectedTarget.IsAliveAndValid())
                 return false;
             if (_itemConsumer != null && !_itemConsumer.CanConsume(sourceItemInstanceId))
                 return false;
@@ -71,7 +71,7 @@ namespace CombatSystem
             for (int i = 0; i < _targets.Count; i++)
             {
                 IDamageable target = _targets[i];
-                if (target == null || !target.IsAlive)
+                if (!target.IsAliveAndValid())
                     continue;
 
                 DamageRequest request = new DamageRequest
@@ -151,13 +151,13 @@ namespace CombatSystem
                     for (int i = 0; i < queried.Count; i++)
                     {
                         IDamageable target = queried[i];
-                        if (target != null && target.IsAlive && _targetSet.Add(target))
+                        if (target.IsAliveAndValid() && _targetSet.Add(target))
                             _targets.Add(target);
                     }
                 }
             }
 
-            if (selectedTarget != null && selectedTarget.IsAlive && _targetSet.Add(selectedTarget))
+            if (selectedTarget.IsAliveAndValid() && _targetSet.Add(selectedTarget))
                 _targets.Add(selectedTarget);
         }
     }

@@ -81,7 +81,7 @@ namespace Play
                 IDamageable target = _detector != null
                     ? _detector.GetTarget(portIndex)
                     : null;
-                bool autoRequested = autoFire && target != null && target.IsAlive;
+                bool autoRequested = autoFire && target.IsAliveAndValid();
 
                 if (!manualHeld && !autoRequested)
                     continue;

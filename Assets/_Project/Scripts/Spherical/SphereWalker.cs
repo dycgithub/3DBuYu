@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.Serialization;
 
+[DefaultExecutionOrder(-100)]
 public class SphereWalker : MonoBehaviour
 {
     [Header("Sphere 设置")]
@@ -33,7 +34,7 @@ public class SphereWalker : MonoBehaviour
             pivotDistance = Vector3.Distance(cameraFollowPos.position, GetEffectiveCenter());
     }
 
-    private void Update()
+    private void LateUpdate()
     {
         UpdateCameraPivot();
     }
@@ -63,10 +64,19 @@ public class SphereWalker : MonoBehaviour
         if (cameraFollowPos == null) return;
 
         Vector3 center = GetEffectiveCenter();
-        Vector3 dirFromCenter = (transform.position - center).normalized;
+        Vector3 offsetFromCenter = transform.position - center;
+        if (offsetFromCenter.sqrMagnitude < 1e-6f)
+            return;
 
+        Vector3 dirFromCenter = offsetFromCenter.normalized;
         cameraFollowPos.position = center + dirFromCenter * pivotDistance;
-        cameraFollowPos.rotation = Quaternion.LookRotation(-dirFromCenter);
+
+        // 将上一帧的屏幕上方向投影到新切平面，减少沿球面移动时的滚转跳变。
+        Vector3 tangentUp = Vector3.ProjectOnPlane(cameraFollowPos.up, dirFromCenter);
+        if (tangentUp.sqrMagnitude < 1e-6f)
+            SphericalCoordinates.GetTangentBasis(dirFromCenter, out _, out tangentUp);
+
+        cameraFollowPos.rotation = Quaternion.LookRotation(-dirFromCenter, tangentUp.normalized);
     }
 
     private void OnDrawGizmosSelected()

@@ -40,7 +40,7 @@ namespace Services
         /// <summary>存活敌人数变化(参数:当前存活数)。</summary>
         Observable<int> OnEnemiesAliveChanged { get; }
 
-        /// <summary>所有波次已完成(一轮游戏结束信号)。</summary>
+        /// <summary>所有配置波次已完成的事实通知，不代表胜负。</summary>
         Observable<Unit> OnAllWavesCompleted { get; }
 
         // === 控制方法 ===

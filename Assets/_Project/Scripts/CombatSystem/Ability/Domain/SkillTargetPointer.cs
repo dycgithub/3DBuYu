@@ -7,12 +7,12 @@ namespace CombatSystem
     public sealed class SkillTargetPointer
     {
         public IDamageable CurrentTarget { get; private set; }
-        public bool HasTarget => CurrentTarget != null && CurrentTarget.IsAlive;
+        public bool HasTarget => CurrentTarget.IsAliveAndValid();
         public event Action<IDamageable> TargetChanged;
 
         public bool Confirm(IDamageable target)
         {
-            if (target == null || !target.IsAlive)
+            if (!target.IsAliveAndValid())
                 return false;
 
             CurrentTarget = target;

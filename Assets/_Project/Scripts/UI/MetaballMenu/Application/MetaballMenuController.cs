@@ -1,8 +1,5 @@
-using System;
 using System.Collections.Generic;
-using R3;
 using Services;
-using TMPro;
 using UnityEngine;
 using VContainer;
 using _Project.UI.Animations;
@@ -11,13 +8,12 @@ namespace _Project.UI.MetaballMenu
 {
     /// <summary>
     /// 管理居中融球菜单的轨道、按键、能量支付和面板入口。
-    /// 表现层只负责显示，能量仍由战斗 Scope 中的 ICombatEnergyService 所有。
+    /// 能量仅用于支付融合消耗，状态由战斗 Scope 中的 IEnergyService 所有。
     /// </summary>
     public sealed class MetaballMenuController : MonoBehaviour
     {
         [Header("表现")]
         [SerializeField] private MetaballFieldGraphic _field;
-        [SerializeField] private TMP_Text _energyLabel;
         [SerializeField] private List<MetaballMenuItem> _items = new();
         [SerializeField] private float _orbitRadius = 230f;
         [SerializeField] private float _orbitSpeed = 24f;
@@ -33,7 +29,6 @@ namespace _Project.UI.MetaballMenu
         [Inject] private IEnergyService _energy;
         [Inject] private ICombatPhaseService _combatPhase;
 
-        private IDisposable _energySubscription;
         private float _orbitAngle;
         private bool _wasPanelVisible;
 
@@ -50,10 +45,8 @@ namespace _Project.UI.MetaballMenu
 
         private void Start()
         {
-            if (_energy != null)
-                _energySubscription = _energy.CurrentEnergy.Subscribe(UpdateEnergyLabel);
-            else
-                Debug.LogWarning("[MetaballMenuController] 未注入 ICombatEnergyService，融球不会推进。", this);
+            if (_energy == null)
+                Debug.LogWarning("[MetaballMenuController] 未注入 IEnergyService，融球不会推进。", this);
 
             if (_input == null)
                 Debug.LogWarning("[MetaballMenuController] 未注入 IInputService，融球不会响应按键。", this);
@@ -174,20 +167,6 @@ namespace _Project.UI.MetaballMenu
         {
             for (int i = 0; i < _items.Count; i++)
                 _items[i]?.Progress.RequireRelease();
-        }
-
-        private void UpdateEnergyLabel(float currentEnergy)
-        {
-            if (_energyLabel == null)
-                return;
-
-            float maximumEnergy = _energy != null ? _energy.MaximumEnergy : 0f;
-            _energyLabel.text = $"能量 {currentEnergy:F0}/{maximumEnergy:F0}";
-        }
-
-        private void OnDestroy()
-        {
-            _energySubscription?.Dispose();
         }
 
         private void OnValidate()

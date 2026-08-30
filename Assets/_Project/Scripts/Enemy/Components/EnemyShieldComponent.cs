@@ -1,6 +1,7 @@
 using UnityEngine;
 using VContainer;
 using Services;
+using Utils;
 
 namespace EnemySystem.Components
 {
@@ -10,7 +11,7 @@ namespace EnemySystem.Components
     /// 挂到 Tank 类型敌人预制体上。
     /// </summary>
     [RequireComponent(typeof(Enemy))]
-    public class EnemyShieldComponent : MonoBehaviour
+    public class EnemyShieldComponent : MonoBehaviour, IPooledObject
     {
         [Header("护盾")]
         [Tooltip("护盾最大值")]
@@ -64,7 +65,7 @@ namespace EnemySystem.Components
             currentShield -= absorb;
             finalDamage -= absorb;
 
-            _effectService?.Play("ShieldHit", transform.position);
+            _effectService?.Play(EffectSystem.EffectId.ShieldHit, transform.position);
 
             return true; // 继续(可能仍有溢出伤害到 HP)
         }
@@ -75,6 +76,18 @@ namespace EnemySystem.Components
             if (Time.time - lastDamageTime < shieldRegenDelay) return;
 
             currentShield = Mathf.Min(shieldValue, currentShield + shieldRegenRate * Time.deltaTime);
+        }
+
+        public void OnRentFromPool()
+        {
+            currentShield = shieldValue;
+            lastDamageTime = -shieldRegenDelay;
+        }
+
+        public void OnReturnToPool()
+        {
+            currentShield = 0f;
+            lastDamageTime = 0f;
         }
     }
 }

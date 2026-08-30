@@ -37,7 +37,7 @@ public class SphericalGeometry
 
     public bool IsTargetInCone(IDamageable target, float coneAngle = 90f)
     {
-        if (target == null || !target.IsAlive) return false;
+        if (!target.IsAliveAndValid()) return false;
         Vector3 origin = firePoint != null ? firePoint.position : turretBase.position;
         Vector3 coneDir = GetDefaultDirection();
         Vector3 toTarget = (target.Position - origin).normalized;

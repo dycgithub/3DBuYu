@@ -34,6 +34,8 @@ namespace GameSystem
         [Inject] private IEnergyService _energy;
         [Inject] private Play.CentralCore centralCore;
         [Inject] private IWaveEventService _waveService;
+        [Inject] private RunRuleService _runRuleService;
+        [Inject] private IKillStreakService _killStreak;
         [Inject] private IInputService _input;
         [Inject] private CentralLoadout _centralLoadout;
         [Inject] private TransmitterLoadout _transmitterLoadout;
@@ -43,6 +45,8 @@ namespace GameSystem
         private BattlePassManager _battlePassManager;
         private GameObject _playerInstance;
         private int _lastSettlementReward;
+        private bool _isStartingLevel;
+        private bool _energyDepletedDuringStart;
 
         public GameState CurrentState => _stateMachine.CurrentState;
         bool Services.ICombatPhaseService.CanPerformCombatActions
@@ -130,6 +134,7 @@ namespace GameSystem
 
             // TimeManager 的剩余时间仅保留兼容显示；本局终局由能量耗尽决定。
             _timeManager?.Tick(deltaTime);
+            _killStreak?.Tick(deltaTime);
 
             float targetDuration = stageConfig != null ? stageConfig.timeLimit : 0f;
             _session.AdvanceTime(deltaTime, targetDuration);
@@ -140,10 +145,6 @@ namespace GameSystem
 
             _energy.SetCostMultiplier(_session.OvertimeMultiplier);
             _energy.Tick(deltaTime, stageConfig != null ? stageConfig.baseEnergyDrainPerSecond : 0f);
-
-            // 事件负责即时响应，轮询用于覆盖没有经过服务入口的边界调用。
-            if (_energy.IsDepleted)
-                HandleEnergyDepleted();
         }
 
         private void Start()
@@ -165,11 +166,15 @@ namespace GameSystem
             _pauseService?.Resume();
             _session.Reset();
             _lastSettlementReward = 0;
+            _killStreak?.BeginRun(stageConfig.killStreakWindowSeconds);
             _centralLoadout?.BeginRun();
             _transmitterLoadout?.BeginRun();
             _timeManager?.Initialize(stageConfig.timeLimit);
-            _energy?.Initialize(stageConfig.initialEnergy, stageConfig.maxEnergy);
+
+            _isStartingLevel = true;
+            _energyDepletedDuringStart = false;
             ActivateRunSubscriptions();
+            _energy?.Initialize(stageConfig.initialEnergy, stageConfig.maxEnergy);
 
             _stateMachine.ChangeState(GameState.Playing);
             SpawnPlayer();
@@ -182,9 +187,12 @@ namespace GameSystem
             OnGameStarted?.Invoke();
             OnRunTimeChanged?.Invoke(_session.ElapsedTime);
 
-            // 初始能量为 0 时不等待下一帧，立即按本局规则判定。
-            if (_energy != null && _energy.IsDepleted)
+            _isStartingLevel = false;
+            if (_energyDepletedDuringStart)
+            {
+                _energyDepletedDuringStart = false;
                 HandleEnergyDepleted();
+            }
 
             Debug.Log($"[GameManager] 关卡开始: 目标时长 {stageConfig.timeLimit} 秒");
         }
@@ -269,16 +277,22 @@ namespace GameSystem
 
         private void HandleEnergyDepleted()
         {
+            if (_isStartingLevel)
+            {
+                _energyDepletedDuringStart = true;
+                return;
+            }
+
             if (_stateMachine.CurrentState != GameState.Playing)
                 return;
 
-            bool meetsRequirements = RunRuleMath.MeetsRunRequirements(
+            RunVerdict verdict = _runRuleService.JudgeEnergyDepleted(
                 _session.ElapsedTime,
                 stageConfig != null ? stageConfig.timeLimit : 0f,
                 _session.KillCount,
                 stageConfig != null ? stageConfig.targetKillCount : 0);
 
-            if (meetsRequirements)
+            if (verdict == RunVerdict.Victory)
                 Settle();
             else
                 GameOver();
@@ -292,8 +306,9 @@ namespace GameSystem
                 return;
             }
 
-            _playerInstance = centralCore.gameObject;
+            _playerInstance = centralCore.transform.root.gameObject;
             _playerInstance.tag = "Player";
+            centralCore.gameObject.tag = "Player";
         }
 
         public void OnEnemyKilled(int pointsValue)
@@ -305,6 +320,7 @@ namespace GameSystem
                 pointsValue,
                 _session.OvertimeMultiplier);
             _session.RecordKill(scaledPoints);
+            _killStreak?.RegisterKill();
             _enemyKilled?.Invoke(scaledPoints);
         }
 

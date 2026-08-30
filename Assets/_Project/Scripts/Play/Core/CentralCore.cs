@@ -21,6 +21,10 @@ namespace Play
         [Header("自身数据")] [SerializeField] private SphereWalker _sphereWalker;
         public SphereWalker SphereWalker => _sphereWalker;
 
+        [Header("发射器背包绑定")]
+        [Tooltip("按 CentralSO.Transmitters 顺序填写发射器背包；不使用物体名称推断映射。")]
+        [SerializeField] private GridView[] transmitterBackpacks;
+
         [SerializeField] private TransmitterAttributes baseTransmitterAttributes;
 
         [Header("球冠更新")] [Tooltip("端口位置更新间隔帧数（降低开销）。位置发生变化时会立即更新。")] [Min(1)] [SerializeField]
@@ -31,9 +35,6 @@ namespace Play
         private Vector3 _lastAlignPosition;
         private int _alignFrameCounter;
         private bool _initialized;
-
-        [Header("调试")] 
-        [SerializeField] private bool showGizmos = true;
 
         [Inject] private IObjectResolver _resolver;
 
@@ -141,6 +142,7 @@ namespace Play
                 transform,
                 _resolver,
                 baseTransmitterAttributes);
+            BindTransmitterBackpacks();
             centralAttributes = new CentralAttributes(
                 centralSo.detectionRadius,
                 centralSo.baseRotationSpeed);
@@ -158,6 +160,51 @@ namespace Play
             _turretModel = Instantiate(centralSo.modelPrefab, transform);
             _turretModel.transform.localPosition = Vector3.zero;
             _turretModel.transform.localRotation = Quaternion.identity;
+        }
+
+        private void BindTransmitterBackpacks()
+        {
+            int portCount = _portManager != null ? _portManager.PortCount : 0;
+            if (transmitterBackpacks == null || transmitterBackpacks.Length != portCount)
+            {
+                int configuredCount = transmitterBackpacks != null ? transmitterBackpacks.Length : 0;
+                Debug.LogWarning(
+                    $"[CentralCore] {name}: 发射器背包数量 {configuredCount} 与端口数量 {portCount} 不匹配。",
+                    this);
+            }
+
+            var assignedBackpacks = new HashSet<GridView>();
+            int bindCount = Mathf.Min(
+                transmitterBackpacks != null ? transmitterBackpacks.Length : 0,
+                portCount);
+
+            for (int index = 0; index < bindCount; index++)
+            {
+                GridView backpack = transmitterBackpacks[index];
+                if (backpack == null)
+                {
+                    Debug.LogWarning($"[CentralCore] {name}: 发射器索引 {index} 未配置背包。", this);
+                    continue;
+                }
+
+                if (backpack.GridType != GridType.TransmitterBackpack)
+                {
+                    Debug.LogWarning(
+                        $"[CentralCore] {name}: 发射器索引 {index} 引用了非 TransmitterBackpack 网格 {backpack.name}。",
+                        backpack);
+                    continue;
+                }
+
+                if (!assignedBackpacks.Add(backpack))
+                {
+                    Debug.LogWarning(
+                        $"[CentralCore] {name}: 背包 {backpack.name} 被重复分配，跳过索引 {index}。",
+                        backpack);
+                    continue;
+                }
+
+                backpack.AssignTransmitter(index);
+            }
         }
 
         private void BindRuntimeComponents()

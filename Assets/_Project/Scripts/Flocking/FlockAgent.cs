@@ -1,21 +1,16 @@
 using UnityEngine;
-#if UNITY_ENTITIES
-using Unity.Entities;
-#endif
-using VContainer;
 
 namespace FlockingSystem
 {
     /// <summary>
     /// 通用群游代理 — 为装饰鱼群和敌人提供 Boids 驱动的移动。
     ///
-    /// 每帧自动执行聚合/分离/对齐规则 + 边界约束。
-    /// 外部系统可通过 <see cref="SpeedMultiplier"/> 控制速度（如状态效果）。
+    /// 保留用于非 ECS 场景的 Mono Flocking 行为；Enemy 运行时由 ECS 接管。
     ///
     /// 使用方式：
     /// 1. 挂载到任何需要群游行为的 GameObject 上
     /// 2. 场景中需要有一个 FlockManager 实例
-    /// 3. 通过在 Start 中调用 FlockManager.Register(this) 加入群组
+    /// 3. 通过调用 <see cref="Initialize"/> 加入群组
     /// </summary>
     public class FlockAgent : MonoBehaviour
     {
@@ -100,22 +95,8 @@ namespace FlockingSystem
             Speed = Random.Range(minSpeed, maxSpeed);
         }
 
-        [Inject] private FlockManager _injectedManager;
-
-        void Start()
-        {
-            if (Manager == null && _injectedManager != null)
-            {
-                Manager = _injectedManager;
-                Manager.Register(this);
-            }
-        }
-
         void Update()
         {
-            // ECS 接管模式：不执行运行时逻辑
-            if (IsECSActive()) return;
-
             ApplyMovementInternal();
         }
 
@@ -145,7 +126,6 @@ namespace FlockingSystem
         /// </summary>
         public void ApplyMovement(float deltaTime)
         {
-            if (IsECSActive()) return;
             ApplyMovementInternal(deltaTime);
         }
 
@@ -247,20 +227,5 @@ namespace FlockingSystem
 
         #endregion
 
-        #region ECS Detection
-
-        private static bool IsECSActive()
-        {
-#if UNITY_ENTITIES
-            foreach (var world in World.All)
-            {
-                if (world.IsCreated && world.GetExistingSystem<ECS.FlockBoidsSystem>() != default)
-                    return true;
-            }
-#endif
-            return false;
-        }
-
-        #endregion
     }
 }

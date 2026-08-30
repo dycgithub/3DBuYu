@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using EffectSystem;
 
 namespace CombatSystem
 {
@@ -14,6 +15,8 @@ namespace CombatSystem
         public DamageType DamageType = DamageType.Physical;
         public TrajectoryDefinition Trajectory;
         public BulletVisualDefinition Visual;
+        public EffectId HitEffect = EffectId.BulletHit;
+        public EffectId ExpiredEffect = EffectId.BulletExpired;
         public List<BulletEffectDefinition> OnHitEffects;
         public List<BulletEffectDefinition> OnExpiredEffects;
         public List<BulletEffectDefinition> OnTriggerEffects;

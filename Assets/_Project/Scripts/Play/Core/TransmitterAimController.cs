@@ -52,7 +52,7 @@ namespace Play
                     continue;
 
                 IDamageable target = _detector.GetTarget(i);
-                if (target != null && target.IsAlive)
+                if (target.IsAliveAndValid())
                     AimAtTarget(port, target);
                 else
                     ReturnToSphereCenter(port, sphereCenter);
@@ -105,7 +105,7 @@ namespace Play
                     continue;
 
                 IDamageable target = _detector.GetTarget(i);
-                if (target != null && target.IsAlive)
+                if (target.IsAliveAndValid())
                     Gizmos.DrawLine(port.FirePoint.position, target.Position);
             }
         }

@@ -3,6 +3,7 @@ using UnityEngine;
 using GameSystem;
 using Services;
 using VContainer;
+using EffectSystem;
 
 namespace Play
 {
@@ -22,8 +23,8 @@ namespace Play
         public float hitCooldown = 1f;
 
         [Header("特效")]
-        [Tooltip("碰撞特效名称（通过 EffectManager 播放）。")]
-        public string hitEffectName = "PlayerDamage";
+        [Tooltip("碰撞特效键（通过 EffectManager 播放）。")]
+        public EffectId hitEffect = EffectId.PlayerDamage;
 
         // ── 内部 ──────────────────────────────────────────
 
@@ -69,7 +70,7 @@ namespace Play
 
             _gameManager.Timer.AddTimePenalty(penaltyPerHit);
 
-            _effectService?.Play(hitEffectName, transform.position);
+            _effectService?.Play(hitEffect, transform.position);
         }
 
         #endregion

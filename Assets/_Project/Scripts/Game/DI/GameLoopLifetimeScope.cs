@@ -4,13 +4,15 @@ using VContainer;
 using VContainer.Unity;
 using CombatSystem;
 using Services;
+using CameraSystem;
 using SpatialSystem.Bridge;
 using EnemySystem.Spawning;
 using EnemySystem.Wave;
-using FlockingSystem;
+using FlockingSystem.ECS;
 using Play;
 using UnityEngine;
 using Utils;
+using EffectSystem;
 
 /// <summary>
 /// GameLoopScene 的场景子容器,随场景卸载而销毁。
@@ -21,6 +23,11 @@ public class GameLoopLifetimeScope : LifetimeScope
     [Header("Item Tooltip")]
     [SerializeField] private bool hoverTooltipEnabled = true;
     [SerializeField] private bool selectedTooltipEnabled = false;
+    [Header("Effects")]
+    [SerializeField] private CombatEffectCatalogSO combatEffectCatalog;
+    [Header("Flocking")]
+    [Tooltip("ECS Flocking 的场景级配置资产。")]
+    [SerializeField] private EnemyFlockSettingsSO enemyFlockSettings;
 
     protected override void Configure(IContainerBuilder builder)
     {
@@ -40,10 +47,25 @@ public class GameLoopLifetimeScope : LifetimeScope
         builder.RegisterComponentInHierarchy<WaveController>().As<IWaveEventService>().AsSelf();
         builder.RegisterComponentInHierarchy<SpawnPositionProvider>().As<ISpawnPositionProvider>().AsSelf();
         builder.RegisterComponentInHierarchy<SpatialRegistry>().As<ISpatialQueryService>().AsSelf();
-        builder.RegisterComponentInHierarchy<FlockManager>().AsSelf();
+        if (enemyFlockSettings != null)
+        {
+            builder.RegisterInstance(enemyFlockSettings).AsSelf();
+            builder.Register<EnemyFlockRuntimeService>(Lifetime.Singleton).AsSelf();
+        }
+        else
+        {
+            Debug.LogError("[GameLoopLifetimeScope] 未配置 EnemyFlockSettings，无法启动 ECS Flocking。", this);
+        }
+
+        if (combatEffectCatalog != null)
+            builder.RegisterInstance(combatEffectCatalog).AsSelf();
+        else
+            Debug.LogError("[GameLoopLifetimeScope] 未配置 CombatEffectCatalogSO。", this);
+        builder.Register<RunRuleService>(Lifetime.Singleton).AsSelf();
 
         // Per-run combat resources must be disposed with the game-loop scope.
         builder.Register<EnergyService>(Lifetime.Singleton).As<IEnergyService>().AsSelf();
+        builder.Register<KillStreakService>(Lifetime.Singleton).As<IKillStreakService>().AsSelf();
         builder.Register<GamePauseService>(Lifetime.Singleton).As<IGamePauseService>().AsSelf();
         builder.Register<GameObjectPoolService>(Lifetime.Singleton).As<IGameObjectPool>().AsSelf();
 
@@ -87,6 +109,7 @@ public class GameLoopLifetimeScope : LifetimeScope
             .As<Services.IGameEventService>()
             .As<Services.ICombatPhaseService>()
             .AsSelf();
+        builder.RegisterComponentInHierarchy<SphericalCameraDirector>().AsSelf();
         builder.RegisterComponentInHierarchy<EffectSystem.EffectManager>()
             .As<Services.IEffectService>()
             .As<Services.IPooledEffectService>()

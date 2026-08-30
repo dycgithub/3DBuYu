@@ -1,36 +1,41 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using FlockingSystem;
+using FlockingSystem.ECS;
 using Services;
 using Interfaces;
 using SpatialSystem.Bridge;
 using VContainer;
 using CombatSystem;
 using UnityEngine.Serialization;
+using EffectSystem;
 
 namespace EnemySystem
 {
     /// <summary>
     /// 敌人实体 - 单类(无子类)。
     /// 行为差异(Fast 闪避 / Tank 护盾+爆炸)通过 <see cref="EnemyDodgeComponent"/> 等组件挂载实现。
-    /// 配置仅由 <see cref="EnemyAttributes"/> SO 承载(HP + Speed + 必要 flock 参数)。
+    /// 基础生命和类型由 <see cref="EnemyAttributes"/> SO 承载，群游参数由 ECS 的 <see cref="EnemyFlockSettingsSO"/> 统一提供。
     /// </summary>
     [RequireComponent(typeof(Collider))]
     public class Enemy : MonoBehaviour, ILockable, IBuffable, IDamageReceiver
     {
         [FormerlySerializedAs("stats")]
         [Header("基础数据")]
-        [Tooltip("敌人属性 SO(HP/Speed/Flocking)")]
+        [Tooltip("敌人属性 SO(HP/Speed/类型)")]
         [SerializeField] private EnemyAttributes attributes;
 
         [Header("调试")]
         [SerializeField] private bool showDebugInfo = false;
 
+        [Header("视觉反馈")]
+        [SerializeField] private EffectId hitEffect = EffectId.EnemyHit;
+        [SerializeField] private EffectId deathEffect = EffectId.EnemyDeath;
+
         // === 运行时状态 ===
         protected bool isDead = false;
         protected Collider enemyCollider;
-        protected FlockAgent flockAgent;
+        protected EnemyFlockBridge flockBridge;
         protected BuffController _buffController;
         protected int spatialEntityId = -1;
 
@@ -58,6 +63,7 @@ namespace EnemySystem
 
         [Inject] protected ISpatialQueryService _spatialService;
         [Inject] protected IEffectService _effectService;
+        [Inject] private EnemyFlockSettingsSO _flockSettings;
 
         // === IDamageable ===
         Vector3 IDamageable.Position => transform.position;
@@ -89,7 +95,8 @@ namespace EnemySystem
         protected virtual void Awake()
         {
             enemyCollider = GetComponent<Collider>();
-            flockAgent = GetComponent<FlockAgent>() ?? gameObject.AddComponent<FlockAgent>();
+            flockBridge = GetComponent<EnemyFlockBridge>()
+                ?? gameObject.AddComponent<EnemyFlockBridge>();
             _buffController = GetComponent<BuffController>() ?? gameObject.AddComponent<BuffController>();
         }
 
@@ -103,8 +110,12 @@ namespace EnemySystem
         {
             if (_spatialService != null)
             {
+                float neighbourDistance = _flockSettings != null
+                    ? _flockSettings.GetProfile(EnemyType, 1f).NeighbourDistance
+                    : 5f;
                 spatialEntityId = _spatialService.Register(
-                    this, flockAgent != null ? flockAgent.NeighbourDistance : 5f,
+                    this,
+                    neighbourDistance,
                     SpatialRegistry.LAYER_ENEMY);
             }
         }
@@ -121,8 +132,8 @@ namespace EnemySystem
         protected virtual void Update()
         {
             if (isDead) return;
-            if (flockAgent != null)
-                flockAgent.SpeedMultiplier = SpeedMultiplier;
+            if (flockBridge != null && flockBridge.IsEcsControlled)
+                flockBridge.SetSpeedMultiplier(SpeedMultiplier);
             UpdateSpatialPosition();
         }
 
@@ -159,13 +170,6 @@ namespace EnemySystem
             CurrentHealth = scaledMaxHp;
 
             SpeedMultiplier = speedMult;
-
-            if (flockAgent != null)
-            {
-                flockAgent.NeighbourDistance = attributes.flockNeighbourDistance;
-                flockAgent.SeparationDistance = attributes.flockSeparationDistance;
-                flockAgent.RotationSpeed = attributes.flockRotationSpeed;
-            }
         }
 
         #endregion
@@ -222,7 +226,7 @@ namespace EnemySystem
 
             CurrentHealth -= effectiveDamage;
 
-            _effectService?.Play("EnemyHit", transform.position);
+            _effectService?.Play(hitEffect, transform.position);
             OnDamageTaken(effectiveDamage);
 
             bool isKill = false;
@@ -265,7 +269,7 @@ namespace EnemySystem
             if (enemyCollider != null)
                 enemyCollider.enabled = false;
 
-            _effectService?.Play("EnemyDeath", transform.position);
+            _effectService?.Play(deathEffect, transform.position);
             OnDeath();
 
             OnDied?.Invoke(this);

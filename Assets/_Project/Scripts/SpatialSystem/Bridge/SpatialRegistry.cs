@@ -239,7 +239,7 @@ namespace SpatialSystem.Bridge
             {
                 var result = queryBuffer[i];
                 var entity = GetEntity(result.EntityId);
-                if (entity != null && entity.IsAlive && entity.Transform != null)
+                if (entity.IsAliveAndValid() && entity.Transform != null)
                 {
                     managedResultCache.Add(entity);
                 }
@@ -267,7 +267,7 @@ namespace SpatialSystem.Bridge
                     continue;
 
                 IDamageable entity = GetEntity(pair.Key);
-                if (entity != null && entity.IsAlive && entity.Transform != null)
+                if (entity.IsAliveAndValid() && entity.Transform != null)
                     managedResultCache.Add(entity);
             }
 
@@ -291,7 +291,7 @@ namespace SpatialSystem.Bridge
                 out var result))
             {
                 var entity = GetEntity(result.EntityId);
-                if (entity != null && entity.IsAlive && entity.Transform != null)
+                if (entity.IsAliveAndValid() && entity.Transform != null)
                 {
                     return entity;
                 }
@@ -315,7 +315,7 @@ namespace SpatialSystem.Bridge
             {
                 var result = managedBuffer[i];
                 var entity = GetEntity(result.EntityId);
-                if (entity != null && entity.IsAlive && entity.Transform != null)
+                if (entity.IsAliveAndValid() && entity.Transform != null)
                 {
                     managedResultCache.Add(entity);
                 }
@@ -364,7 +364,7 @@ namespace SpatialSystem.Bridge
             foreach (var kvp in entityLookup)
             {
                 var entity = kvp.Value;
-                if (entity == null || entity.Transform == null || !entity.IsAlive)
+                if (!entity.IsAliveAndValid() || entity.Transform == null)
                     expiredEntityIds.Add(kvp.Key);
             }
 
@@ -393,7 +393,7 @@ namespace SpatialSystem.Bridge
             var oldLookup = new Dictionary<int, (IDamageable entity, float radius, int layerMask)>();
             foreach (var kvp in entityLookup)
             {
-                if (kvp.Value != null && kvp.Value.IsAlive && kvp.Value.Transform != null)
+                if (kvp.Value.IsAliveAndValid() && kvp.Value.Transform != null)
                 {
                     if (entityIdToEntryIndex.TryGetValue(kvp.Key, out int entryIdx) &&
                         entryIdx >= 0 && entryIdx < grid.ActiveEntryCount)

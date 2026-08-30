@@ -1,6 +1,7 @@
 using UnityEngine;
 using VContainer;
 using Services;
+using EffectSystem;
 
 namespace EnemySystem.Components
 {
@@ -64,7 +65,7 @@ namespace EnemySystem.Components
             dir.Normalize();
 
             transform.position += dir * dodgeDistance;
-            _effectService?.Play("EnemyDodge", transform.position);
+            _effectService?.Play(EffectId.EnemyDodge, transform.position);
         }
     }
 }

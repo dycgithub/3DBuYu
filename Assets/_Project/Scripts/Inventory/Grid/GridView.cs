@@ -30,15 +30,22 @@ public class GridView : MonoBehaviour
     [SerializeField] private Color cellColor=new Color(0.75f,0.85f,1f);
     [SerializeField] private InventoryPlacementConfig placementConfig;
     [SerializeField] private ItemShapeSet shapeSet;
+    private const int UnassignedTransmitterIndex = -1;
+
     [Header("战斗绑定")]
-    [SerializeField] private string transmitterId;
+    private int _transmitterIndex = UnassignedTransmitterIndex;
     private InventoryHighLight highlight;
     
     /// <summary>网格数据(VM),所有判定都走这里。</summary>
     public GridVM GridVM { get; private set; }
     /// <summary>网格分类(Shop/Storage/Equipment)。</summary>
     public GridType GridType => gridType;
-    public string TransmitterId => transmitterId;
+
+    /// <summary>
+    /// CentralCore 分配的发射器索引；未分配的发射器背包为 -1。
+    /// </summary>
+    public int TransmitterIndex => _transmitterIndex;
+
     /// <summary>网格内物品数量(数据层,去重:一个物品占多格只计一次)。</summary>
     public int ItemCount => GridVM != null ? GridVM.ItemCount : 0;
     /// <summary>网格内全部物品(去重)。</summary>
@@ -60,6 +67,33 @@ public class GridView : MonoBehaviour
     public ItemShapeSet ShapeSet => shapeSet != null ? shapeSet : ItemShapeSet.Default;
 
     public event Action<GridView> ItemsChanged;
+
+    /// <summary>
+    /// 由 CentralCore 按端口配置顺序分配发射器索引。
+    /// </summary>
+    /// <param name="transmitterIndex">对应 CentralSO.Transmitters 的零基索引。</param>
+    /// <returns>网格是发射器背包且索引有效时返回 true。</returns>
+    public bool AssignTransmitter(int transmitterIndex)
+    {
+        if (gridType != GridType.TransmitterBackpack)
+        {
+            Debug.LogWarning($"[GridView] {name}: 只有 TransmitterBackpack 可以绑定发射器。", this);
+            return false;
+        }
+
+        if (transmitterIndex < 0)
+        {
+            Debug.LogWarning($"[GridView] {name}: 发射器索引必须为非负数。", this);
+            return false;
+        }
+
+        if (_transmitterIndex == transmitterIndex)
+            return true;
+
+        _transmitterIndex = transmitterIndex;
+        ItemsChanged?.Invoke(this);
+        return true;
+    }
 
     [Inject] private IObjectResolver _resolver;
     [Inject] private IShopService _shop;

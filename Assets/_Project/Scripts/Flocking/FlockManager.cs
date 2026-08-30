@@ -1,10 +1,5 @@
 using UnityEngine;
 using System.Collections.Generic;
-#if UNITY_ENTITIES
-using Unity.Entities;
-using Unity.Mathematics;
-using FlockingSystem.ECS;
-#endif
 
 namespace FlockingSystem
 {
@@ -18,7 +13,7 @@ namespace FlockingSystem
     ///
     /// 不负责生成代理 — 代理由外部系统(EnemySpawnManager/装饰鱼生成器等)
     /// 通过 <see cref="Register"/> 注册。
-    /// ECS 可用时自动切换到 Burst 加速路径。
+    /// Enemy 的 ECS 路径由 EnemyFactory 管理；此处保留 Mono FlockAgent 的回退组和区域参数。
     /// </summary>
     public class FlockManager : MonoBehaviour
     {
@@ -60,10 +55,6 @@ namespace FlockingSystem
         {
             GoalPos = transform.position;
 
-            if (IsECSActive())
-            {
-                Debug.Log("[FlockManager] ECS 模式已激活。");
-            }
         }
 
         void Update()
@@ -79,37 +70,7 @@ namespace FlockingSystem
                     Random.Range(-swimLimits.z, swimLimits.z));
             }
 
-#if UNITY_ENTITIES
-            UpdateECSSingleton();
-#endif
         }
-
-#if UNITY_ENTITIES
-        private void UpdateECSSingleton()
-        {
-            foreach (var world in World.All)
-            {
-                if (!world.IsCreated) continue;
-
-                var system = world.GetExistingSystem<FlockBoidsSystem>();
-                if (system == default) continue;
-
-                var entityManager = world.EntityManager;
-                var query = entityManager.CreateEntityQuery(
-                    ComponentType.ReadWrite<FlockGoalData>());
-
-                if (query.TryGetSingletonEntity<FlockGoalData>(out var entity))
-                {
-                    entityManager.SetComponentData(entity, new FlockGoalData
-                    {
-                        GoalPos = new float3(GoalPos.x, GoalPos.y, GoalPos.z),
-                        SwimCenter = new float3(transform.position.x, transform.position.y, transform.position.z),
-                        SwimLimits = new float3(swimLimits.x, swimLimits.y, swimLimits.z),
-                    });
-                }
-            }
-        }
-#endif
 
         #endregion
 
@@ -143,24 +104,6 @@ namespace FlockingSystem
                     agent.SpeedMultiplier = multiplier;
             }
 
-#if UNITY_ENTITIES
-            foreach (var world in World.All)
-            {
-                if (!world.IsCreated) continue;
-                var em = world.EntityManager;
-                var query = em.CreateEntityQuery(
-                    ComponentType.ReadWrite<FlockAgentData>());
-                var agentsData = query.ToComponentDataArray<FlockAgentData>(Unity.Collections.Allocator.Temp);
-                for (int i = 0; i < agentsData.Length; i++)
-                {
-                    var a = agentsData[i];
-                    a.SpeedMultiplier = multiplier;
-                    agentsData[i] = a;
-                }
-                em.SetComponentData(query, agentsData);
-                agentsData.Dispose();
-            }
-#endif
         }
 
         /// <summary>
@@ -181,22 +124,6 @@ namespace FlockingSystem
                 if (Agents[i] == null)
                     Agents.RemoveAt(i);
             }
-        }
-
-        #endregion
-
-        #region Utility
-
-        private static bool IsECSActive()
-        {
-#if UNITY_ENTITIES
-            foreach (var world in World.All)
-            {
-                if (world.IsCreated && world.GetExistingSystem<FlockBoidsSystem>() != default)
-                    return true;
-            }
-#endif
-            return false;
         }
 
         #endregion

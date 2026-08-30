@@ -41,7 +41,7 @@ namespace CombatSystem
                     continue;
 
                 IDamageable candidate = collider.GetComponentInParent<IDamageable>();
-                if (candidate == null || !candidate.IsAlive)
+                if (!candidate.IsAliveAndValid())
                     continue;
 
                 int targetId = candidate.Transform != null ? candidate.Transform.GetInstanceID() : 0;
@@ -77,7 +77,7 @@ namespace CombatSystem
                     continue;
 
                 IDamageable candidate = candidateHit.collider.GetComponentInParent<IDamageable>();
-                if (candidate == null || !candidate.IsAlive || candidateHit.distance >= nearestDistance)
+                if (!candidate.IsAliveAndValid() || candidateHit.distance >= nearestDistance)
                     continue;
 
                 nearestDistance = candidateHit.distance;

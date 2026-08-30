@@ -2,6 +2,7 @@ using UnityEngine;
 using VContainer;
 using Services;
 using GameSystem;
+using EffectSystem;
 
 namespace EnemySystem.Components
 {
@@ -79,7 +80,7 @@ namespace EnemySystem.Components
             if (hitPlayer && _gameManager != null && _gameManager.CurrentState == GameState.Playing)
                 _gameManager.Timer?.AddTimePenalty(timePenalty);
 
-            _effectService?.Play("BigExplosion", transform.position);
+            _effectService?.Play(EffectId.BigExplosion, transform.position);
         }
 
         private int QueryOverlappingColliders()

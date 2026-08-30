@@ -5,7 +5,7 @@ namespace EnemySystem
 {
     /// <summary>
     /// 波次配置集合 — 持有所有 <see cref="WaveData"/>。
-    /// 不再支持循环模式(loopMode 已移除),按 waves 列表顺序推进,完成后由 IWaveEventService 通知 OnAllWavesCompleted。
+    /// 不再支持循环模式(loopMode 已移除),按 waves 列表顺序推进,完成后由 IWaveEventService 发布 OnAllWavesCompleted 事实。
     /// </summary>
     [CreateAssetMenu(fileName = "WaveConfig", menuName = "Game/Wave Config")]
     public class WaveConfig : ScriptableObject

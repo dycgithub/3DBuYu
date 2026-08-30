@@ -30,6 +30,9 @@ namespace EnemySystem.Spawning
 
             var pos = _spawnPositionProvider.GetSpawnPosition();
             var enemy = _factory.Create(info.prefab.gameObject, pos, currentWave);
+            if (enemy == null)
+                return;
+
             enemy.OnDied += HandleEnemyDied;
             _activeEnemies.Add(enemy);
             _activeEnemyCount.Value = _activeEnemies.Count;

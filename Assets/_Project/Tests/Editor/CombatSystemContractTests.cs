@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Reflection;
 using CombatSystem;
 using Interfaces;
 using NUnit.Framework;
@@ -58,13 +59,25 @@ public sealed class CombatSystemContractTests
         Assert.That(attack.Damage, Is.EqualTo(60f));
     }
 
-    [TestCase("Transmitter", 0)]
-    [TestCase("Transmitter (1)", 1)]
-    [TestCase("Transmitter (7)", 7)]
-    [TestCase("TopLeft", 6)]
-    public void TransmitterGridBinding_UsesTheConfirmedMapping(string name, int expectedIndex)
+    [Test]
+    public void GridView_AssignsTransmitterIndexWithoutUsingObjectName()
     {
-        Assert.That(TransmitterGridBinding.ResolveIndex(name), Is.EqualTo(expectedIndex));
+        var gridObject = new GameObject("任意名称");
+        try
+        {
+            GridView grid = gridObject.AddComponent<GridView>();
+            FieldInfo gridTypeField = typeof(GridView).GetField(
+                "gridType",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            gridTypeField.SetValue(grid, GridType.TransmitterBackpack);
+
+            Assert.That(grid.AssignTransmitter(6), Is.True);
+            Assert.That(grid.TransmitterIndex, Is.EqualTo(6));
+        }
+        finally
+        {
+            Object.DestroyImmediate(gridObject);
+        }
     }
 
     [Test]

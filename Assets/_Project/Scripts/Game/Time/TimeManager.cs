@@ -17,7 +17,7 @@ namespace GameSystem
         /// <summary>本次归零是否由时间惩罚导致(true = 惩罚扣光,false = 自然倒计时耗尽)。</summary>
         public bool ExpiredByPenalty { get; private set; }
 
-        /// <summary>剩余时间归零时触发(一次性事件,结算/失败判定用)。</summary>
+        /// <summary>剩余时间归零时触发的一次性事实通知，不代表胜负。</summary>
         public event Action OnTimeExpired;
 
         public float RewardMultiplier { get; set; } = 1f;

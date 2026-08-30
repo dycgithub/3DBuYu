@@ -74,7 +74,7 @@ namespace Play
 
         public bool HasTarget(int index)
         {
-            return IsValidIndex(index) && _targets[index] != null && _targets[index].IsAlive;
+            return IsValidIndex(index) && _targets[index].IsAliveAndValid();
         }
 
         public IDamageable GetTarget(int index)
@@ -106,7 +106,7 @@ namespace Play
                     continue;
 
                 IDamageable damageable = collider.GetComponentInParent<IDamageable>();
-                if (damageable != null && damageable.IsAlive && _uniqueTargets.Add(damageable))
+                if (damageable.IsAliveAndValid() && _uniqueTargets.Add(damageable))
                     _cached.Add(damageable);
             }
         }
@@ -198,7 +198,7 @@ namespace Play
             for (int i = 0; i < _cached.Count; i++)
             {
                 IDamageable target = _cached[i];
-                if (target == null || !target.IsAlive)
+                if (!target.IsAliveAndValid())
                     continue;
 
                 float threat = target is ILockable lockable ? lockable.ThreatLevel : 0f;
@@ -225,7 +225,7 @@ namespace Play
             for (int i = 0; i < _cached.Count; i++)
             {
                 IDamageable target = _cached[i];
-                if (target == null || !target.IsAlive)
+                if (!target.IsAliveAndValid())
                     continue;
 
                 float distance = SqrDistance(origin, target.Position);

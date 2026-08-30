@@ -26,6 +26,9 @@ namespace EnemySystem.Spawning
 
         public Vector3 GetSpawnPosition()
         {
+            if (_playerTransform == null)
+                ResolvePlayer();
+
             for (int attempt = 0; attempt < 8; attempt++)
             {
                 if (spawnPoints.Count == 0) break;

@@ -7,7 +7,7 @@ namespace CombatSystem
     {
         public bool TryApply(IDamageable target, in DamageRequest request, out DamageResult result)
         {
-            if (target == null || !target.IsAlive)
+            if (!target.IsAliveAndValid())
             {
                 result = new DamageResult { Outcome = DamageOutcome.Invalid };
                 return false;
@@ -25,7 +25,7 @@ namespace CombatSystem
                 Outcome = DamageOutcome.Applied,
                 ActualDamage = request.BaseDamage,
                 RemainingHealth = 0f,
-                IsKill = !target.IsAlive
+                IsKill = !target.IsAliveAndValid()
             };
             return true;
         }

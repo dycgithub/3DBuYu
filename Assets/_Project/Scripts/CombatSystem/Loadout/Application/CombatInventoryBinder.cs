@@ -76,13 +76,8 @@ namespace CombatSystem
             if (grid.GridType != GridType.TransmitterBackpack)
                 return;
 
-            int transmitterIndex = TransmitterGridBinding.ResolveIndex(grid.TransmitterId);
-            if (transmitterIndex < 0)
-                transmitterIndex = TransmitterGridBinding.ResolveIndex(grid.name);
-            if (transmitterIndex < 0 && grid.transform.parent != null)
-                transmitterIndex = TransmitterGridBinding.ResolveIndex(grid.transform.parent.name);
-            if (transmitterIndex >= 0)
-                _transmitterLoadout.SetItems(transmitterIndex, grid.Items);
+            if (grid.TransmitterIndex >= 0)
+                _transmitterLoadout.SetItems(grid.TransmitterIndex, grid.Items);
         }
 
         private bool FindItem(int itemInstanceId, out GridView grid, out ItemVM item)

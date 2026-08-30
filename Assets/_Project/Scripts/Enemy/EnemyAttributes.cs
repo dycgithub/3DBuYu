@@ -13,20 +13,20 @@ namespace EnemySystem
         [Tooltip("最大生命值(波次倍率作用前的基础值)")]
         public float baseHealth = 100f;
 
-        [Tooltip("移动速度(波次倍率作用前的基础值,作用于 FlockAgent)")]
+        [Tooltip("移动速度(波次倍率作用前的兼容字段；ECS Flocking 使用 EnemyFlockSettings)")]
         public float baseSpeed = 3f;
 
         [Tooltip("敌人类型(用于 ILockable 分类)")]
         public EnemyType enemyType = EnemyType.Normal;
 
-        [Header("Flocking")]
-        [Tooltip("FlockAgent 邻居检测半径")]
+        [Header("Legacy Flocking Data")]
+        [Tooltip("旧 Mono Flocking 的兼容数据；运行时不再读取")]
         public float flockNeighbourDistance = 5f;
 
-        [Tooltip("FlockAgent 分离距离")]
+        [Tooltip("旧 Mono Flocking 的兼容数据；运行时不再读取")]
         public float flockSeparationDistance = 2f;
 
-        [Tooltip("FlockAgent 旋转速度")]
+        [Tooltip("旧 Mono Flocking 的兼容数据；运行时不再读取")]
         public float flockRotationSpeed = 5f;
     }
 }

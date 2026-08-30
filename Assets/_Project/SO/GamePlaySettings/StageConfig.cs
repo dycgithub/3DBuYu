@@ -29,6 +29,11 @@ namespace GameSystem
         [Min(0f)]
         public float baseEnergyDrainPerSecond = 1f;
 
+        [Header("连杀")]
+        [Tooltip("两次击杀之间允许保持连杀的最长间隔（秒）。")]
+        [Min(0f)]
+        public float killStreakWindowSeconds = 3f;
+
         [Header("默认难度")]
         [Tooltip("未由关卡选择界面覆盖时使用的难度配置。")]
         public DifficultyConfig defaultDifficulty;
