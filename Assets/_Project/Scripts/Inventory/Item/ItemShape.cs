@@ -17,6 +17,8 @@ public enum ItemShape
     LShape3,        // L 形
     TShape1,        // T 形
     TShape2,        // T 形
+    Plus3,          // 3×3 十字
+    Plus5,          // 5×5 十字
 
 }
 

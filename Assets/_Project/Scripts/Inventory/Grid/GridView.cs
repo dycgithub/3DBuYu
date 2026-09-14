@@ -30,10 +30,8 @@ public class GridView : MonoBehaviour
     [SerializeField] private Color cellColor=new Color(0.75f,0.85f,1f);
     [SerializeField] private InventoryPlacementConfig placementConfig;
     [SerializeField] private ItemShapeSet shapeSet;
-    private const int UnassignedTransmitterIndex = -1;
-
     [Header("战斗绑定")]
-    private int _transmitterIndex = UnassignedTransmitterIndex;
+    [SerializeField] private string _portId;
     private InventoryHighLight highlight;
     
     /// <summary>网格数据(VM),所有判定都走这里。</summary>
@@ -41,10 +39,8 @@ public class GridView : MonoBehaviour
     /// <summary>网格分类(Shop/Storage/Equipment)。</summary>
     public GridType GridType => gridType;
 
-    /// <summary>
-    /// CentralCore 分配的发射器索引；未分配的发射器背包为 -1。
-    /// </summary>
-    public int TransmitterIndex => _transmitterIndex;
+    /// <summary>所属发射器稳定标识；中央背包和非战斗网格为空。</summary>
+    public string PortId => _portId;
 
     /// <summary>网格内物品数量(数据层,去重:一个物品占多格只计一次)。</summary>
     public int ItemCount => GridVM != null ? GridVM.ItemCount : 0;
@@ -68,29 +64,25 @@ public class GridView : MonoBehaviour
 
     public event Action<GridView> ItemsChanged;
 
-    /// <summary>
-    /// 由 CentralCore 按端口配置顺序分配发射器索引。
-    /// </summary>
-    /// <param name="transmitterIndex">对应 CentralSO.Transmitters 的零基索引。</param>
-    /// <returns>网格是发射器背包且索引有效时返回 true。</returns>
-    public bool AssignTransmitter(int transmitterIndex)
+    /// <summary>由战斗场景绑定器分配发射器稳定标识。</summary>
+    public bool AssignPortId(string portId)
     {
         if (gridType != GridType.TransmitterBackpack)
         {
-            Debug.LogWarning($"[GridView] {name}: 只有 TransmitterBackpack 可以绑定发射器。", this);
+            Debug.LogWarning($"[GridView] {name}: 只有 TransmitterBackpack 可以绑定 PortId。", this);
             return false;
         }
 
-        if (transmitterIndex < 0)
+        if (string.IsNullOrWhiteSpace(portId))
         {
-            Debug.LogWarning($"[GridView] {name}: 发射器索引必须为非负数。", this);
+            Debug.LogWarning($"[GridView] {name}: PortId 不能为空。", this);
             return false;
         }
 
-        if (_transmitterIndex == transmitterIndex)
+        if (_portId == portId)
             return true;
 
-        _transmitterIndex = transmitterIndex;
+        _portId = portId;
         ItemsChanged?.Invoke(this);
         return true;
     }
@@ -236,11 +228,18 @@ public class GridView : MonoBehaviour
         => new Vector2(item.Width * cellSize + (item.Width - 1) * cellSpacing,
             item.Height * cellSize + (item.Height - 1) * cellSpacing);
     
-    public bool CanPlace(ItemVM item, int col, int row) => GridVM.CanPlace(item, col, row);
-    
+    public bool CanPlace(ItemVM item, int col, int row)
+    {
+        EnsureGridVM();
+        return EvaluatePlacement(item, col, row, out _);
+    }
+
     /// <summary>规则层判定放置合法性(绿/红高亮的依据)。</summary>
     public bool EvaluatePlacement(ItemVM item, int col, int row, out PlacementBlockReason reason)
-        => PlacementConfig.Evaluate(GridVM, item, col, row, out reason);
+    {
+        EnsureGridVM();
+        return PlacementConfig.Evaluate(GridVM, item, col, row, out reason);
+    }
 
     /// <summary>
     /// 放置物品:写数据(GridVM.Place) + 移动 UI。
@@ -248,7 +247,11 @@ public class GridView : MonoBehaviour
     /// </summary>
     public bool PlaceItem(ItemView view, int col, int row)
     {
-        if(!GridVM.CanPlace(view.ItemVM, col, row)) return false;
+        EnsureGridVM();
+        if (!CanPlace(view.ItemVM, col, row))
+        {
+            return false;
+        }
 
         if (view.OwnerGrid != this)
         {
@@ -267,7 +270,8 @@ public class GridView : MonoBehaviour
     public ItemView SpawnItem(ItemVM item, int col, int row)
     {
         // 先写占用数据,失败(越界/占用)则拒绝生成
-        if (!GridVM.Place(item, col, row))
+        EnsureGridVM();
+        if (!CanPlace(item, col, row) || !GridVM.Place(item, col, row))
         {
             Debug.LogWarning($"无法在 ({col},{row}) 生成物品:越界或格子被占用");
             return null;
@@ -398,14 +402,26 @@ public class GridView : MonoBehaviour
         return true;
     }
 
+    /// <summary>通知绑定装备重新读取当前网格内容。</summary>
+    public void NotifyItemsChanged() => ItemsChanged?.Invoke(this);
+
     /// <summary>暂时从数据网格移除物品，供拖拽回退或跨网格放置使用。</summary>
     public bool DetachItem(ItemVM item)
+    {
+        return DetachItem(item, true);
+    }
+
+    /// <summary>
+    /// 从数据网格移除物品，并允许拖拽事务延迟最终同步。
+    /// </summary>
+    public bool DetachItem(ItemVM item, bool notifyItemsChanged)
     {
         if (GridVM == null || item == null || !GridVM.Contains(item))
             return false;
 
         GridVM.Remove(item);
-        ItemsChanged?.Invoke(this);
+        if (notifyItemsChanged)
+            ItemsChanged?.Invoke(this);
         return true;
     }
 }

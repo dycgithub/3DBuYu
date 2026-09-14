@@ -26,21 +26,26 @@ namespace Play
         /// <summary>端口状态发生变化时通知观察者，参数为活跃数量和总数量。</summary>
         public event Action<int, int> OnPortCountChanged;
 
+        /// <summary>
+        /// 按中心配置创建端口运行时对象。
+        /// </summary>
+        /// <param name="centralSo">中心炮台配置。</param>
+        /// <param name="parent">端口 FirePoint 的父级变换。</param>
+        /// <param name="resolver">用于实例化端口模型的对象解析器。</param>
         public CentralTransmitterManager(
             CentralSO centralSo,
             Transform parent,
-            IObjectResolver resolver,
-            TransmitterAttributes templateAttributes = null)
+            IObjectResolver resolver)
         {
             CentralSoConfig = centralSo ?? throw new ArgumentNullException(nameof(centralSo));
             _parent = parent ?? throw new ArgumentNullException(nameof(parent));
             _resolver = resolver;
 
-            CreatePorts(templateAttributes);
+            CreatePorts();
             OnPortCountChanged?.Invoke(ActivePortCount, PortCount);
         }
 
-        private void CreatePorts(TransmitterAttributes templateAttributes)
+        private void CreatePorts()
         {
             TransmitterSO[] configs = CentralSoConfig.Transmitters;
             if (configs == null || configs.Length == 0)
@@ -51,29 +56,43 @@ namespace Play
 
             for (int i = 0; i < configs.Length; i++)
             {
+                TransmitterSO config = configs[i];
+                if (config == null)
+                {
+                    Debug.LogWarning(
+                        $"[CentralTransmitterManager] 端口索引 {i} 配置为空，已跳过。",
+                        CentralSoConfig);
+                    continue;
+                }
+
                 CentralTransmitterRuntime port = new CentralTransmitterRuntime(
-                    configs[i],
-                    i,
+                    config,
+                    _ports.Count,
                     _parent,
-                    _resolver,
-                    templateAttributes);
+                    _resolver);
 
                 _ports.Add(port);
                 if (port.IsLocked)
+                {
                     _lockedPortCount++;
+                }
             }
         }
 
         public CentralTransmitterRuntime UnlockNextPort()
         {
             if (_disposed)
+            {
                 return null;
+            }
 
             for (int i = 0; i < _ports.Count; i++)
             {
                 CentralTransmitterRuntime port = _ports[i];
                 if (!port.IsLocked)
+                {
                     continue;
+                }
 
                 port.Unlock();
                 _lockedPortCount--;
@@ -88,7 +107,9 @@ namespace Play
         public CentralTransmitterRuntime GetPort(int index)
         {
             if (index < 0 || index >= _ports.Count)
+            {
                 return null;
+            }
 
             return _ports[index];
         }
@@ -96,12 +117,16 @@ namespace Play
         public CentralTransmitterRuntime GetPortById(string portId)
         {
             if (string.IsNullOrEmpty(portId))
+            {
                 return null;
+            }
 
             for (int i = 0; i < _ports.Count; i++)
             {
                 if (_ports[i].PortId == portId)
+                {
                     return _ports[i];
+                }
             }
 
             return null;
@@ -110,11 +135,15 @@ namespace Play
         public void Dispose()
         {
             if (_disposed)
+            {
                 return;
+            }
 
             _disposed = true;
             for (int i = 0; i < _ports.Count; i++)
+            {
                 _ports[i].Dispose();
+            }
 
             _ports.Clear();
             _lockedPortCount = 0;

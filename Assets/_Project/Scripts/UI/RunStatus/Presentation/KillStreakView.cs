@@ -3,57 +3,58 @@ using R3;
 using Services;
 using TMPro;
 using UnityEngine;
-using UnityEngine.UI;
 using VContainer;
 
 namespace _Project.UI.RunStatus
 {
     /// <summary>
-    /// 将本局连杀状态显示为独立的 UGUI HUD。
-    /// <para>视图只订阅服务状态，不直接推进连杀计时或修改战斗数据。</para>
+    /// 将本局连杀状态显示为由 Hierarchy 配置的 UGUI HUD。
+    /// <para>视图只订阅服务状态，不创建或配置运行时 UI，也不直接修改战斗数据。</para>
     /// </summary>
     public sealed class KillStreakView : MonoBehaviour
     {
-        [Header("字体")]
-        [SerializeField] private TMP_FontAsset _fontAsset;
-
-        [Header("布局")]
-        [SerializeField] private Vector2 _panelSize = new(360f, 86f);
-        [SerializeField] private Vector2 _panelOffset = new(0f, -24f);
-        [SerializeField, Min(0f)] private float _currentFontSize = 30f;
-        [SerializeField, Min(0f)] private float _bestFontSize = 16f;
+        [Header("UI 引用")]
+        [Tooltip("Hierarchy 中连杀面板的 CanvasGroup。")]
+        [SerializeField] private CanvasGroup _canvasGroup;
+        [Tooltip("Hierarchy 中显示当前连杀数的 TMP 文本。")]
+        [SerializeField] private TextMeshProUGUI _currentLabel;
+        [Tooltip("Hierarchy 中显示最高连杀数的 TMP 文本。")]
+        [SerializeField] private TextMeshProUGUI _bestLabel;
 
         [Header("表现")]
+        [Tooltip("没有连杀时的目标透明度。")]
         [SerializeField, Range(0f, 1f)] private float _idleAlpha = 0.35f;
+        [Tooltip("连杀增加后的目标透明度。")]
         [SerializeField, Range(0f, 1f)] private float _activeAlpha = 1f;
+        [Tooltip("透明度每秒接近目标值的速度。")]
         [SerializeField, Min(0f)] private float _fadeSpeed = 6f;
+        [Tooltip("连杀增加时面板的初始缩放倍数。")]
         [SerializeField, Min(1f)] private float _punchScale = 1.14f;
+        [Tooltip("面板缩放每秒恢复到 1 的速度。")]
         [SerializeField, Min(0f)] private float _scaleRecoverySpeed = 5f;
-        [SerializeField] private Color _panelColor = new(0.01f, 0.035f, 0.065f, 0.55f);
-        [SerializeField] private Color _currentColor = new(1f, 0.75f, 0.22f, 1f);
-        [SerializeField] private Color _bestColor = new(0.75f, 0.85f, 1f, 0.9f);
+        [Tooltip("当前连杀文本格式。")]
         [SerializeField] private string _currentFormat = "连杀 ×{0}";
+        [Tooltip("最高连杀文本格式。")]
         [SerializeField] private string _bestFormat = "最高 ×{0}";
 
         [Inject] private IKillStreakService _killStreak;
 
-        private CanvasGroup _canvasGroup;
-        private TextMeshProUGUI _currentLabel;
-        private TextMeshProUGUI _bestLabel;
         private float _targetAlpha;
         private int _lastStreak;
         private IDisposable _currentSubscription;
         private IDisposable _bestSubscription;
 
-        private void Awake()
-        {
-            CreatePanel();
-            _targetAlpha = Mathf.Clamp01(_idleAlpha);
-            _canvasGroup.alpha = _targetAlpha;
-        }
-
         private void Start()
         {
+            if (!HasReferences())
+            {
+                Debug.LogWarning("[KillStreakView] CanvasGroup、当前连杀文本和最高连杀文本都必须绑定。", this);
+                return;
+            }
+
+            _targetAlpha = Mathf.Clamp01(_idleAlpha);
+            _canvasGroup.alpha = _targetAlpha;
+
             if (_killStreak == null)
             {
                 Debug.LogWarning("[KillStreakView] 未注入 IKillStreakService。", this);
@@ -66,12 +67,16 @@ namespace _Project.UI.RunStatus
 
         private void Update()
         {
-            if (_canvasGroup == null)
+            if (!HasReferences())
+            {
                 return;
+            }
 
             float deltaTime = Time.unscaledDeltaTime;
             if (deltaTime <= 0f || float.IsNaN(deltaTime) || float.IsInfinity(deltaTime))
+            {
                 return;
+            }
 
             _canvasGroup.alpha = Mathf.MoveTowards(
                 _canvasGroup.alpha,
@@ -91,78 +96,9 @@ namespace _Project.UI.RunStatus
             _bestSubscription?.Dispose();
         }
 
-        private void CreatePanel()
+        private bool HasReferences()
         {
-            var panelObject = new GameObject(
-                "KillStreakOverlay",
-                typeof(RectTransform),
-                typeof(CanvasGroup),
-                typeof(Image));
-            panelObject.transform.SetParent(transform, false);
-
-            RectTransform panel = panelObject.GetComponent<RectTransform>();
-            panel.anchorMin = new Vector2(0.5f, 1f);
-            panel.anchorMax = new Vector2(0.5f, 1f);
-            panel.pivot = new Vector2(0.5f, 1f);
-            panel.anchoredPosition = _panelOffset;
-            panel.sizeDelta = _panelSize;
-
-            _canvasGroup = panelObject.GetComponent<CanvasGroup>();
-            _canvasGroup.interactable = false;
-            _canvasGroup.blocksRaycasts = false;
-
-            Image background = panelObject.GetComponent<Image>();
-            background.color = _panelColor;
-            background.raycastTarget = false;
-
-            _currentLabel = CreateLabel(
-                panel,
-                "CurrentStreak",
-                new Vector2(0f, -8f),
-                new Vector2(_panelSize.x, 46f),
-                _currentFontSize,
-                _currentColor,
-                FontStyles.Bold);
-            _bestLabel = CreateLabel(
-                panel,
-                "BestStreak",
-                new Vector2(0f, -57f),
-                new Vector2(_panelSize.x, 24f),
-                _bestFontSize,
-                _bestColor,
-                FontStyles.Normal);
-        }
-
-        private TextMeshProUGUI CreateLabel(
-            RectTransform parent,
-            string objectName,
-            Vector2 position,
-            Vector2 size,
-            float fontSize,
-            Color color,
-            FontStyles fontStyle)
-        {
-            var labelObject = new GameObject(objectName, typeof(RectTransform));
-            labelObject.transform.SetParent(parent, false);
-
-            RectTransform rect = labelObject.GetComponent<RectTransform>();
-            rect.anchorMin = new Vector2(0.5f, 1f);
-            rect.anchorMax = new Vector2(0.5f, 1f);
-            rect.pivot = new Vector2(0.5f, 1f);
-            rect.anchoredPosition = position;
-            rect.sizeDelta = size;
-
-            TextMeshProUGUI label = labelObject.AddComponent<TextMeshProUGUI>();
-            if (_fontAsset != null)
-                label.font = _fontAsset;
-            label.fontSize = Mathf.Max(0f, fontSize);
-            label.fontStyle = fontStyle;
-            label.color = color;
-            label.alignment = TextAlignmentOptions.Center;
-            label.enableWordWrapping = false;
-            label.overflowMode = TextOverflowModes.Overflow;
-            label.raycastTarget = false;
-            return label;
+            return _canvasGroup != null && _currentLabel != null && _bestLabel != null;
         }
 
         private void HandleCurrentStreakChanged(int streak)

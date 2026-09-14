@@ -1,10 +1,16 @@
+using System;
+using System.Reflection;
 using EnemySystem;
 using GameSystem;
+using InventorySystem.Shop;
 using NUnit.Framework;
 using CombatSystem;
 using Services;
 using UnityEngine;
+using Object = UnityEngine.Object;
 using Utils;
+using VContainer;
+using VContainer.Unity;
 
 public class EnergyServiceTests
 {
@@ -29,44 +35,31 @@ public class EnergyServiceTests
 
         Assert.That(_energy.MaximumEnergy, Is.EqualTo(100f));
         Assert.That(_energy.CurrentEnergy.CurrentValue, Is.EqualTo(100f));
-        Assert.That(_energy.CostMultiplier, Is.EqualTo(1f));
     }
 
     [Test]
-    public void TrySpend_AppliesTheConfiguredMultiplierAtomically()
+    public void TrySpend_RejectsInsufficientEnergyAtomically()
     {
         _energy.Initialize(100f, 100f);
-        _energy.SetCostMultiplier(2f);
 
         bool firstSpend = _energy.TrySpend(20f, EnergySpendKind.Shot);
-        bool rejectedSpend = _energy.TrySpend(31f, EnergySpendKind.Skill);
+        bool rejectedSpend = _energy.TrySpend(81f, EnergySpendKind.Skill);
 
         Assert.That(firstSpend, Is.True);
         Assert.That(rejectedSpend, Is.False);
-        Assert.That(_energy.CurrentEnergy.CurrentValue, Is.EqualTo(60f));
+        Assert.That(_energy.CurrentEnergy.CurrentValue, Is.EqualTo(80f));
     }
 
     [Test]
     public void Tick_DrainsEnergyAndClampsAtZero()
     {
         _energy.Initialize(10f, 10f);
-        _energy.SetCostMultiplier(3f);
 
         float drained = _energy.Tick(2f, 2f);
 
-        Assert.That(drained, Is.EqualTo(10f));
-        Assert.That(_energy.CurrentEnergy.CurrentValue, Is.EqualTo(0f));
-        Assert.That(_energy.IsDepleted, Is.True);
-    }
-
-    [Test]
-    public void SetCostMultiplier_DoesNotAllowValuesBelowOne()
-    {
-        _energy.Initialize(10f, 10f);
-
-        _energy.SetCostMultiplier(0f);
-
-        Assert.That(_energy.CostMultiplier, Is.EqualTo(1f));
+        Assert.That(drained, Is.EqualTo(4f));
+        Assert.That(_energy.CurrentEnergy.CurrentValue, Is.EqualTo(6f));
+        Assert.That(_energy.IsDepleted, Is.False);
     }
 
     [Test]
@@ -78,24 +71,6 @@ public class EnergyServiceTests
 
         Assert.That(gained, Is.EqualTo(5f));
         Assert.That(_energy.CurrentEnergy.CurrentValue, Is.EqualTo(10f));
-    }
-}
-
-public class RunRuleMathTests
-{
-    [TestCase(300f, 300f, 0)]
-    [TestCase(304.99f, 300f, 0)]
-    [TestCase(305f, 300f, 1)]
-    [TestCase(310f, 300f, 2)]
-    public void GetOvertimeTier_UsesFiveSecondSteps(float elapsedTime, float targetDuration, int expectedTier)
-    {
-        Assert.That(RunRuleMath.GetOvertimeTier(elapsedTime, targetDuration), Is.EqualTo(expectedTier));
-    }
-
-    [Test]
-    public void GetOvertimeMultiplier_IncreasesByOneForEachTier()
-    {
-        Assert.That(RunRuleMath.GetOvertimeMultiplier(315f, 300f), Is.EqualTo(4f));
     }
 }
 
@@ -189,6 +164,21 @@ public class GameObjectPoolServiceTests
     }
 
     [Test]
+    public void Return_DisablesObjectBeforeInvokingReturnCallbacks()
+    {
+        _prefab.AddComponent<PoolLifecycleProbe>();
+        _first = _pool.Rent(
+            _prefab,
+            new PoolSettings(initialCapacity: 0, maximumRetained: 1));
+        PoolLifecycleProbe probe = _first.GetComponent<PoolLifecycleProbe>();
+
+        bool returned = _pool.Return(_first);
+
+        Assert.That(returned, Is.True);
+        Assert.That(probe.ReturnObservedInactive, Is.True);
+    }
+
+    [Test]
     public void RepeatedReturn_IsRejectedAndDoesNotDuplicateTheAvailableEntry()
     {
         var settings = new PoolSettings(initialCapacity: 0, maximumRetained: 1);
@@ -203,10 +193,186 @@ public class GameObjectPoolServiceTests
         Assert.That(usage.AvailableCount, Is.EqualTo(1));
     }
 
+    [Test]
+    public void ConflictingSettings_ThrowsBeforeChangingExistingBucket()
+    {
+        PoolSettings initialSettings = new(initialCapacity: 1, maximumRetained: 2);
+        _first = _pool.Rent(_prefab, initialSettings);
+        PoolUsage beforeConflict = _pool.GetUsage(_prefab);
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            _pool.Rent(_prefab, new PoolSettings(initialCapacity: 0, maximumRetained: 3));
+        });
+
+        PoolUsage afterConflict = _pool.GetUsage(_prefab);
+        Assert.That(afterConflict.TotalCount, Is.EqualTo(beforeConflict.TotalCount));
+        Assert.That(afterConflict.AvailableCount, Is.EqualTo(beforeConflict.AvailableCount));
+        Assert.That(afterConflict.RentedCount, Is.EqualTo(beforeConflict.RentedCount));
+        Assert.That(_pool.Return(_first), Is.True);
+    }
+
+    [Test]
+    public void ConflictingFactory_ThrowsBeforeInvokingTheNewFactory()
+    {
+        int firstFactoryCalls = 0;
+        int conflictingFactoryCalls = 0;
+        Func<GameObject, GameObject> firstFactory = prefab =>
+        {
+            firstFactoryCalls++;
+            return Object.Instantiate(prefab);
+        };
+        Func<GameObject, GameObject> conflictingFactory = prefab =>
+        {
+            conflictingFactoryCalls++;
+            return Object.Instantiate(prefab);
+        };
+
+        _first = _pool.Rent(
+            _prefab,
+            new PoolSettings(initialCapacity: 0, maximumRetained: 2),
+            factory: firstFactory);
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            _pool.Rent(
+                _prefab,
+                new PoolSettings(initialCapacity: 0, maximumRetained: 2),
+                factory: conflictingFactory);
+        });
+
+        Assert.That(firstFactoryCalls, Is.EqualTo(1));
+        Assert.That(conflictingFactoryCalls, Is.Zero);
+    }
+
+    [Test]
+    public void ConflictingPrewarmSettings_ThrowsBeforeChangingExistingBucket()
+    {
+        PoolSettings initialSettings = new(initialCapacity: 1, maximumRetained: 2);
+        _pool.Prewarm(_prefab, initialSettings, count: 1);
+        PoolUsage beforeConflict = _pool.GetUsage(_prefab);
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            _pool.Prewarm(
+                _prefab,
+                new PoolSettings(initialCapacity: 2, maximumRetained: 4),
+                count: 1);
+        });
+
+        PoolUsage afterConflict = _pool.GetUsage(_prefab);
+        Assert.That(afterConflict.TotalCount, Is.EqualTo(beforeConflict.TotalCount));
+        Assert.That(afterConflict.AvailableCount, Is.EqualTo(beforeConflict.AvailableCount));
+        Assert.That(afterConflict.RentedCount, Is.EqualTo(beforeConflict.RentedCount));
+    }
+
+    [Test]
+    public void Clear_AllowsPrefabToUseANewConfiguration()
+    {
+        _pool.Prewarm(
+            _prefab,
+            new PoolSettings(initialCapacity: 1, maximumRetained: 1),
+            count: 1);
+        _pool.Clear(_prefab);
+
+        _first = _pool.Rent(
+            _prefab,
+            new PoolSettings(initialCapacity: 0, maximumRetained: 3));
+
+        Assert.That(_first, Is.Not.Null);
+        Assert.That(_pool.GetUsage(_prefab).RentedCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ProjectCoreInstaller_RegistersOnePoolForBothServiceContracts()
+    {
+        var builder = new ContainerBuilder();
+        new ProjectCoreInstaller().Install(builder);
+
+        IObjectResolver container = builder.Build();
+        try
+        {
+            Assert.That(
+                container.Resolve<IGameObjectPool>(),
+                Is.SameAs(container.Resolve<GameObjectPoolService>()));
+        }
+        finally
+        {
+            container.Dispose();
+        }
+    }
+
+    [Test]
+    public void ProjectScope_ProvidesOnePoolInstanceToChildScope()
+    {
+        GameObject scopeObject = new GameObject("ProjectScopePoolContract");
+        scopeObject.SetActive(false);
+        scopeObject.AddComponent<ShopManager>();
+        scopeObject.AddComponent<ResourceManager>();
+        scopeObject.AddComponent<AudioManager>();
+        SceneLoader sceneLoader = scopeObject.AddComponent<SceneLoader>();
+        sceneLoader.autoLoadOnStart = false;
+        ProjectLifetimeScope projectScope = scopeObject.AddComponent<ProjectLifetimeScope>();
+        projectScope.autoRun = false;
+        LifetimeScope childScope = null;
+
+        try
+        {
+            using (LifetimeScope.EnqueueParent(null))
+            {
+                FieldInfo scopeName = typeof(LifetimeScope).GetField(
+                    "scopeName",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.That(scopeName, Is.Not.Null);
+                scopeName.SetValue(projectScope, "ProjectScopePoolContract");
+                projectScope.Build();
+                scopeObject.SetActive(true);
+            }
+
+            childScope = projectScope.CreateChild(childScopeName: "ProjectScopePoolContractChild");
+            FieldInfo childScopeName = typeof(LifetimeScope).GetField(
+                "scopeName",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(childScopeName, Is.Not.Null);
+            childScopeName.SetValue(childScope, "ProjectScopePoolContractChild");
+            childScope.Build();
+
+            Assert.That(
+                projectScope.Container.Resolve<IGameObjectPool>(),
+                Is.SameAs(projectScope.Container.Resolve<GameObjectPoolService>()));
+            Assert.That(
+                childScope.Container.Resolve<IGameObjectPool>(),
+                Is.SameAs(projectScope.Container.Resolve<IGameObjectPool>()));
+        }
+        finally
+        {
+            if (childScope != null)
+            {
+                Object.DestroyImmediate(childScope.gameObject);
+            }
+
+            Object.DestroyImmediate(scopeObject);
+        }
+    }
+
     private static void DestroyImmediateIfPresent(GameObject instance)
     {
         if (instance != null)
             Object.DestroyImmediate(instance);
+    }
+
+    private sealed class PoolLifecycleProbe : MonoBehaviour, IPooledObject
+    {
+        public bool ReturnObservedInactive { get; private set; }
+
+        public void OnRentFromPool()
+        {
+        }
+
+        public void OnReturnToPool()
+        {
+            ReturnObservedInactive = !gameObject.activeSelf;
+        }
     }
 }
 
@@ -237,13 +403,13 @@ public class EnemyDamageInterceptorTests
 
         enemy.RegisterPreDamageInterceptor(interceptor);
         enemy.RegisterPreDamageInterceptor(interceptor);
-        DamageResult result = enemy.ReceiveDamage(new DamageRequest { BaseDamage = 1f });
+        DamageResult result = enemy.ReceiveDamageRequest(new DamageRequest { DamageAmount = 1f });
 
         Assert.That(result.Outcome, Is.EqualTo(DamageOutcome.Dodged));
         Assert.That(invokeCount, Is.EqualTo(1));
 
         enemy.UnregisterPreDamageInterceptor(interceptor);
-        enemy.ReceiveDamage(new DamageRequest { BaseDamage = 0f });
+        enemy.ReceiveDamageRequest(new DamageRequest { DamageAmount = 0f });
 
         Assert.That(invokeCount, Is.EqualTo(1));
     }
@@ -259,15 +425,13 @@ public class GameSessionTests
         session.BeginRun("hard", 1234);
         session.RecordKill(25);
         session.RecordKill(0);
-        session.AdvanceTime(310f, 300f);
+        session.AdvanceTime(310f);
 
         Assert.That(session.DifficultyId, Is.EqualTo("hard"));
         Assert.That(session.RandomSeed, Is.EqualTo(1234));
         Assert.That(session.KillCount, Is.EqualTo(2));
         Assert.That(session.PendingPoints, Is.EqualTo(25));
         Assert.That(session.ElapsedTime, Is.EqualTo(310f));
-        Assert.That(session.OvertimeTier, Is.EqualTo(2));
-        Assert.That(session.OvertimeMultiplier, Is.EqualTo(3f));
     }
 
     [Test]
@@ -276,14 +440,13 @@ public class GameSessionTests
         var session = new GameSession();
         session.BeginRun("hard", 1234);
         session.RecordKill(25);
-        session.AdvanceTime(310f, 300f);
+        session.AdvanceTime(310f);
 
         session.Reset();
 
         Assert.That(session.PendingPoints, Is.Zero);
         Assert.That(session.KillCount, Is.Zero);
         Assert.That(session.ElapsedTime, Is.Zero);
-        Assert.That(session.OvertimeTier, Is.Zero);
         Assert.That(session.DifficultyId, Is.Empty);
         Assert.That(session.RandomSeed, Is.Zero);
     }
@@ -293,10 +456,9 @@ public class GameSessionTests
     {
         var session = new GameSession();
 
-        session.AdvanceTime(float.NaN, 300f);
-        session.AdvanceTime(float.PositiveInfinity, 300f);
+        session.AdvanceTime(float.NaN);
+        session.AdvanceTime(float.PositiveInfinity);
 
         Assert.That(session.ElapsedTime, Is.Zero);
-        Assert.That(session.OvertimeTier, Is.Zero);
     }
 }

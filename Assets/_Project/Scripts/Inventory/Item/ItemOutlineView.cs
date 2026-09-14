@@ -5,6 +5,7 @@ using UnityEngine.UI;
 /// <summary>
 /// 绘制物品真实占用形状的外部轮廓。
 /// 轮廓基于占用格边缘生成，不使用 ItemView 包围盒，因此可以正确表现 T 形、L 形等非矩形物品。
+/// 选中和悬停只改变轮廓样式，不改变物品数据或占用范围。
 /// </summary>
 public sealed class ItemOutlineView : MonoBehaviour
 {
@@ -30,6 +31,7 @@ public sealed class ItemOutlineView : MonoBehaviour
     [Header("轮廓")]
     [SerializeField] private bool visible = true;
     [SerializeField] private Color normalColor = new(1f, 1f, 1f, 0.35f);
+    [SerializeField] private Color hoveredColor = new(0.2f, 1f, 0.2f, 1f);
     [SerializeField] private Color selectedColor = new(1f, 0.85f, 0.15f, 1f);
     [SerializeField, Min(0.1f)] private float normalThickness = 2f;
     [SerializeField, Min(0.1f)] private float selectedThickness = 4f;
@@ -37,12 +39,16 @@ public sealed class ItemOutlineView : MonoBehaviour
     private readonly List<Image> _segments = new();
     private RectTransform _rect;
     private bool _selected;
+    private bool _hovered;
 
     /// <summary>当前是否显示轮廓。</summary>
     public bool IsVisible => visible;
 
     /// <summary>当前是否使用选中样式。</summary>
     public bool IsSelected => _selected;
+
+    /// <summary>当前是否使用悬停样式。</summary>
+    public bool IsHovered => _hovered;
 
     /// <summary>当前生成的轮廓线段数量。</summary>
     public int SegmentCount => _segments.Count;
@@ -107,6 +113,13 @@ public sealed class ItemOutlineView : MonoBehaviour
     public void SetSelected(bool value)
     {
         _selected = value;
+        ApplyStyle();
+    }
+
+    /// <summary>切换悬停轮廓样式；选中样式优先于悬停样式。</summary>
+    public void SetHovered(bool value)
+    {
+        _hovered = value;
         ApplyStyle();
     }
 
@@ -248,8 +261,20 @@ public sealed class ItemOutlineView : MonoBehaviour
 
     private void ApplyStyle()
     {
-        Color color = _selected ? selectedColor : normalColor;
-        float thickness = _selected ? selectedThickness : normalThickness;
+        Color color = normalColor;
+        float thickness = normalThickness;
+        if (_hovered)
+        {
+            color = hoveredColor;
+            thickness = selectedThickness;
+        }
+
+        if (_selected)
+        {
+            color = selectedColor;
+            thickness = selectedThickness;
+        }
+
         for (int i = 0; i < _segments.Count; i++)
         {
             Image image = _segments[i];

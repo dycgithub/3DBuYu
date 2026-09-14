@@ -25,6 +25,9 @@ namespace FlockingSystem.ECS
         public float MinSpeed;
         public float MaxSpeed;
         public int VisualIndex;
+        public bool UseExternalMotion;
+        /// <summary>待下一次群游模拟消费的外部速度冲量。</summary>
+        public float3 ExternalImpulse;
     }
 
     public struct EnemyFlockNextPose : IComponentData
@@ -103,7 +106,12 @@ namespace FlockingSystem.ECS
             SpeedMultiplier = speedMultiplier;
         }
 
-        public EnemyFlockAgent ToAgent(float speed)
+        /// <summary>
+        /// 将群游配置转换为 ECS 实体组件数据。
+        /// </summary>
+        /// <param name="speed">实体初始速度。</param>
+        /// <returns>归一化后的 ECS 群游代理数据。</returns>
+        public EnemyFlockAgent CreateAgentData(float speed)
         {
             float minSpeed = math.max(0f, MinSpeed);
             float maxSpeed = math.max(minSpeed, MaxSpeed);

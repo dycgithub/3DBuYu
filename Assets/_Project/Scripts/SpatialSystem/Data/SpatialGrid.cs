@@ -64,6 +64,27 @@ namespace SpatialSystem.Data
         }
 
         /// <summary>
+        /// 按几何中心初始化网格，使网格边界关于中心点对称。
+        /// </summary>
+        public void InitializeCentered(
+            float cellSize,
+            float3 center,
+            int cellsX,
+            int cellsY,
+            int cellsZ,
+            int maxEntries,
+            Allocator allocator)
+        {
+            float3 gridSize = new float3(
+                cellsX * cellSize,
+                cellsY * cellSize,
+                cellsZ * cellSize);
+            float3 origin = center - gridSize * 0.5f;
+
+            Initialize(cellSize, origin, cellsX, cellsY, cellsZ, maxEntries, allocator);
+        }
+
+        /// <summary>
         /// 释放 NativeArray 内存。使用完毕后必须调用。
         /// </summary>
         public void Dispose()

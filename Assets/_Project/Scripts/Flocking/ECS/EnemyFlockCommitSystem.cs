@@ -46,21 +46,40 @@ namespace FlockingSystem.ECS
         {
             Dependency.Complete();
             if (_transforms.isCreated)
+            {
                 _transforms.Dispose();
+            }
+
             if (_slotsByTransformIndex.IsCreated)
+            {
                 _slotsByTransformIndex.Dispose();
+            }
+
             if (_activeByTransformIndex.IsCreated)
+            {
                 _activeByTransformIndex.Dispose();
+            }
+
             if (_poses.IsCreated)
+            {
                 _poses.Dispose();
+            }
             _slotOrder.Clear();
         }
 
-        public int RegisterTransform(Transform target, int slot)
+        /// <summary>
+        /// 注册一个托管敌人的 Transform，并返回其提交数组索引。
+        /// </summary>
+        /// <param name="target">需要同步姿态的托管 Transform。</param>
+        /// <param name="slot">对应的 ECS 群游 slot。</param>
+        /// <returns>注册成功后的数组索引；容量不足或目标无效时返回 -1。</returns>
+        public int RegisterAgentTransform(Transform target, int slot)
         {
             Dependency.Complete();
             if (!target || _transforms.length >= _maximumAgents)
+            {
                 return -1;
+            }
 
             _transforms.Add(target);
             int transformIndex = _transforms.length - 1;
@@ -70,26 +89,44 @@ namespace FlockingSystem.ECS
             return transformIndex;
         }
 
-        public void ConfigureCapacity(int maximumAgents)
+        /// <summary>
+        /// 设置托管 Transform 提交数组的最大代理容量。
+        /// </summary>
+        /// <param name="maximumAgents">要使用的最大代理数量。</param>
+        public void ConfigureAgentCapacity(int maximumAgents)
         {
             Dependency.Complete();
             _maximumAgents = Mathf.Clamp(maximumAgents, 1, EnemyFlockLimits.MaximumAgents);
         }
 
-        public void SetTransformActive(int transformIndex, bool active)
+        /// <summary>
+        /// 设置指定托管 Transform 是否接收 ECS 姿态提交。
+        /// </summary>
+        /// <param name="transformIndex">TransformAccessArray 中的索引。</param>
+        /// <param name="active">是否启用姿态同步。</param>
+        public void SetAgentTransformActive(int transformIndex, bool active)
         {
             Dependency.Complete();
             if (transformIndex < 0 || transformIndex >= _transforms.length)
+            {
                 return;
+            }
 
             _activeByTransformIndex[transformIndex] = active ? (byte)1 : (byte)0;
         }
 
-        public int UnregisterTransform(int transformIndex)
+        /// <summary>
+        /// 移除指定托管 Transform，并在交换删除时返回被移动代理的 slot。
+        /// </summary>
+        /// <param name="transformIndex">要移除的 Transform 数组索引。</param>
+        /// <returns>被交换到移除位置的代理 slot；没有移动代理时返回 -1。</returns>
+        public int UnregisterAgentTransform(int transformIndex)
         {
             Dependency.Complete();
             if (transformIndex < 0 || transformIndex >= _transforms.length)
+            {
                 return -1;
+            }
 
             int lastIndex = _transforms.length - 1;
             int movedSlot = -1;
@@ -110,7 +147,9 @@ namespace FlockingSystem.ECS
         protected override void OnUpdate()
         {
             if (_transforms.length == 0 || _query.IsEmptyIgnoreFilter)
+            {
                 return;
+            }
 
             _localTransformHandle.Update(this);
             _nextPoseHandle.Update(this);
@@ -154,7 +193,9 @@ namespace FlockingSystem.ECS
             {
                 int slot = bridgeIndices[entityIndex].Value;
                 if ((uint)slot >= EnemyFlockLimits.MaximumAgents)
+                {
                     continue;
+                }
 
                 EnemyFlockNextPose pose = nextPoses[entityIndex];
                 transforms[entityIndex] = new LocalTransform
@@ -182,11 +223,15 @@ namespace FlockingSystem.ECS
         public void Execute(int index, TransformAccess transform)
         {
             if (ActiveByTransformIndex[index] == 0)
+            {
                 return;
+            }
 
             int slot = SlotsByTransformIndex[index];
             if ((uint)slot >= EnemyFlockLimits.MaximumAgents)
+            {
                 return;
+            }
 
             EnemyFlockPose pose = Poses[slot];
             transform.position = pose.Position;

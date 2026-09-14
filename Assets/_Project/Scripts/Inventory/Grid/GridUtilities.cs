@@ -110,6 +110,8 @@ public static class GridUtilities
             ItemShape.LShape3 => LShape3(),
             ItemShape.TShape1 => TShape1(),
             ItemShape.TShape2 => TShape2(),
+            ItemShape.Plus3 => Plus3(),
+            ItemShape.Plus5 => Plus5(),
             _ => Single(),
         };
 
@@ -122,5 +124,25 @@ public static class GridUtilities
         public static List<Vector2Int> LShape3() => new() { new Vector2Int(0, 0), new Vector2Int(1, 0) ,new Vector2Int(2,0),new Vector2Int(2,1),new Vector2Int(2,2)};
         public static List<Vector2Int> TShape1() => new() { new Vector2Int(0, 0), new Vector2Int(1, 0), new Vector2Int(2, 0), new Vector2Int(1, 1) };
         public static List<Vector2Int> TShape2() => new() { new Vector2Int(0, 0), new Vector2Int(1, 0), new Vector2Int(2, 0), new Vector2Int(1, 1) ,new Vector2Int(1,2) };
+        public static List<Vector2Int> Plus3() => new()
+        {
+            new Vector2Int(1, 0),
+            new Vector2Int(1, 1),
+            new Vector2Int(1, 2),
+            new Vector2Int(0, 1),
+            new Vector2Int(2, 1),
+        };
+        public static List<Vector2Int> Plus5() => new()
+        {
+            new Vector2Int(2, 0),
+            new Vector2Int(2, 1),
+            new Vector2Int(2, 2),
+            new Vector2Int(2, 3),
+            new Vector2Int(2, 4),
+            new Vector2Int(0, 2),
+            new Vector2Int(1, 2),
+            new Vector2Int(3, 2),
+            new Vector2Int(4, 2),
+        };
     }
 }

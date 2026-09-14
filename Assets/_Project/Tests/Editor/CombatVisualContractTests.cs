@@ -8,12 +8,15 @@ using UnityEditor;
 using UnityEngine;
 using Utils;
 
+/// <summary>
+/// 验证投射物配置、预制体和效果目录之间的资源契约。
+/// </summary>
 public sealed class CombatVisualContractTests
 {
-    private const string BulletProfilePath = "Assets/_Project/SO/Bullet/DefaultBulletProfile.asset";
-    private const string BulletVisualPath = "Assets/_Project/SO/Bullet/DefaultBulletVisual.asset";
-    private const string BulletPrefabPath = "Assets/_Project/Prefabs/Player/Bullet.prefab";
-    private const string PortFolder = "Assets/_Project/SO/Port";
+    private const string ProjectileProfilePath = "Assets/_Project/SO/Bullet/DefaultBulletProfile.asset";
+    private const string ProjectileVisualPath = "Assets/_Project/SO/Bullet/DefaultBulletVisual.asset";
+    private const string ProjectilePrefabPath = "Assets/_Project/Prefabs/Player/Bullet.prefab";
+    private const string PortFolder = "Assets/_Project/SO/Transmitter";
     private const string EffectCatalogPath = "Assets/_Project/SO/Effects/CombatEffectCatalog.asset";
 
     private static readonly EffectId[] RequiredEffects =
@@ -29,22 +32,24 @@ public sealed class CombatVisualContractTests
     };
 
     [Test]
-    public void DefaultBulletProfile_HasAVisiblePrefab()
+    public void DefaultProjectileProfile_HasAVisiblePrefab()
     {
-        BulletProfile profile = AssetDatabase.LoadAssetAtPath<BulletProfile>(BulletProfilePath);
-        BulletVisualDefinition visual = AssetDatabase.LoadAssetAtPath<BulletVisualDefinition>(BulletVisualPath);
-        GameObject bulletPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(BulletPrefabPath);
+        ProjectileProfileSO profile = AssetDatabase.LoadAssetAtPath<ProjectileProfileSO>(ProjectileProfilePath);
+        ProjectileVisualDefinitionSO visual = AssetDatabase.LoadAssetAtPath<ProjectileVisualDefinitionSO>(ProjectileVisualPath);
+        GameObject projectilePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(ProjectilePrefabPath);
 
         Assert.That(profile, Is.Not.Null);
-        Assert.That(profile.Visual, Is.SameAs(visual));
-        Assert.That(profile.Visual.Prefab, Is.SameAs(bulletPrefab));
-        Assert.That(profile.Visual.Prefab.GetComponentInChildren<Renderer>(true), Is.Not.Null);
+        Assert.That(visual, Is.Not.Null);
+        Assert.That(profile.VisualDefinition, Is.Not.Null);
+        Assert.That(profile.VisualDefinition, Is.SameAs(visual));
+        Assert.That(profile.VisualDefinition.ProjectilePrefab, Is.SameAs(projectilePrefab));
+        Assert.That(profile.VisualDefinition.ProjectilePrefab.GetComponentInChildren<Renderer>(true), Is.Not.Null);
     }
 
     [Test]
-    public void EveryPortConfig_UsesTheDefaultBulletProfile()
+    public void EveryTransmitterConfig_UsesTheDefaultProjectileProfile()
     {
-        BulletProfile profile = AssetDatabase.LoadAssetAtPath<BulletProfile>(BulletProfilePath);
+        ProjectileProfileSO profile = AssetDatabase.LoadAssetAtPath<ProjectileProfileSO>(ProjectileProfilePath);
         string[] guids = AssetDatabase.FindAssets("t:TransmitterSO", new[] { PortFolder });
 
         Assert.That(guids, Has.Length.EqualTo(8));
@@ -53,20 +58,21 @@ public sealed class CombatVisualContractTests
             string path = AssetDatabase.GUIDToAssetPath(guid);
             TransmitterSO port = AssetDatabase.LoadAssetAtPath<TransmitterSO>(path);
             Assert.That(port, Is.Not.Null, path);
-            Assert.That(port.defaultBullet, Is.SameAs(profile), path);
+            Assert.That(port.defaultProjectileProfile, Is.SameAs(profile), path);
         }
     }
 
     [Test]
-    public void PlayerContainer_UsesTheDefaultBulletProfile()
+    public void PlayerContainerFireController_StoresNoProjectileConfiguration()
     {
         GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(
             "Assets/_Project/Prefabs/PlayerContainer.prefab");
         TransmitterFireController controller = prefab.GetComponentInChildren<TransmitterFireController>(true);
 
         Assert.That(controller, Is.Not.Null);
-        Assert.That(controller.bulletProfile, Is.SameAs(
-            AssetDatabase.LoadAssetAtPath<BulletProfile>(BulletProfilePath)));
+        SerializedObject serialized = new SerializedObject(controller);
+        Assert.That(serialized.FindProperty("projectileProfile"), Is.Null);
+        Assert.That(serialized.FindProperty("attacksPerSecond"), Is.Null);
     }
 
     [Test]
@@ -123,8 +129,5 @@ public sealed class CombatVisualContractTests
         public bool IsAlive => gameObject.activeInHierarchy;
         public Transform Transform => transform;
 
-        public void TakeDamage(float amount)
-        {
-        }
     }
 }

@@ -90,7 +90,9 @@ namespace FlockingSystem.ECS
         public void OnUpdate(ref SystemState state)
         {
             if (_configQuery.IsEmptyIgnoreFilter || _agentQuery.CalculateEntityCount() == 0)
+            {
                 return;
+            }
 
             EnemyFlockWorldConfig config = _configQuery.GetSingleton<EnemyFlockWorldConfig>();
             _localTransformHandle.Update(ref state);
@@ -151,7 +153,9 @@ namespace FlockingSystem.ECS
         private static void Dispose<T>(ref NativeArray<T> array) where T : struct
         {
             if (array.IsCreated)
+            {
                 array.Dispose();
+            }
         }
     }
 
@@ -204,7 +208,9 @@ namespace FlockingSystem.ECS
 
             var random = new Random(goal.RandomState);
             if (random.NextFloat() < math.saturate(Config.GoalChangeChance))
+            {
                 goal.GoalPosition = GetRandomGoal(ref random);
+            }
 
             goal.RandomState = random.state;
             chunk.SetChunkComponentData(ref ChunkGoalHandle, goal);
@@ -222,11 +228,26 @@ namespace FlockingSystem.ECS
             {
                 int slot = bridgeIndices[entityIndex].Value;
                 if ((uint)slot >= (uint)Config.AgentCapacity || Active[slot] == 0)
+                {
                     continue;
+                }
 
                 EnemyFlockAgent agent = agents[entityIndex];
                 float3 position = transforms[entityIndex].Position;
                 quaternion rotation = transforms[entityIndex].Rotation;
+                float3 externalDisplacement = agent.ExternalImpulse * math.max(0f, DeltaTime);
+                if (agent.UseExternalMotion)
+                {
+                    agent.ExternalImpulse = float3.zero;
+                    nextPoses[entityIndex] = new EnemyFlockNextPose
+                    {
+                        Position = position + externalDisplacement,
+                        Rotation = rotation,
+                    };
+                    agents[entityIndex] = agent;
+                    continue;
+                }
+
                 float3 velocity = agent.Velocity;
                 if (math.lengthsq(velocity) <= 0.0001f)
                 {
@@ -271,10 +292,12 @@ namespace FlockingSystem.ECS
                         math.saturate(rotationSpeed * DeltaTime));
                 }
 
-                float speedMultiplier = math.max(0f, agent.SpeedMultiplier);
+                agent.ExternalImpulse = float3.zero;
                 nextPoses[entityIndex] = new EnemyFlockNextPose
                 {
-                    Position = position + velocity * speedMultiplier * DeltaTime,
+                    Position = position + EnemyFlockBoidsMath.CalculateMovementDelta(
+                        agent,
+                        DeltaTime) + externalDisplacement,
                     Rotation = rotation,
                 };
                 agents[entityIndex] = agent;
@@ -305,7 +328,7 @@ namespace FlockingSystem.ECS
                 math.max(dimensions.y, dimensions.z));
             cellRadius = math.min(cellRadius, maximumCellRadius);
             int candidateLimit = math.max(0, Config.MaximumNeighbourCandidates);
-            int3 centerCell = EnemyFlockGridMath.GetCell(position, Config);
+            int3 centerCell = EnemyFlockGridMath.CalculateCellCoordinates(position, Config);
             float neighbourDistanceSquared = neighbourDistance * neighbourDistance;
             float separationDistanceSquared = separationDistance * separationDistance;
 
@@ -317,7 +340,9 @@ namespace FlockingSystem.ECS
                     {
                         int3 cell = centerCell + new int3(x, y, z);
                         if (math.any(cell < int3.zero) || math.any(cell >= dimensions))
+                        {
                             continue;
+                        }
 
                         int cellIndex = cell.x + dimensions.x
                             * (cell.y + dimensions.y * cell.z);
@@ -331,12 +356,12 @@ namespace FlockingSystem.ECS
                             if (otherSlot == slot
                                 || (uint)otherSlot >= (uint)Config.AgentCapacity
                                 || Active[otherSlot] == 0)
+                            {
                                 continue;
+                            }
 
                             float3 offsetToOther = Positions[otherSlot] - position;
                             float distanceSquared = math.lengthsq(offsetToOther);
-                            if (distanceSquared <= 0f)
-                                continue;
 
                             if (distanceSquared <= neighbourDistanceSquared)
                             {
@@ -350,7 +375,9 @@ namespace FlockingSystem.ECS
                                 separation += EnemyFlockBoidsMath.CalculateSeparationContribution(
                                     position,
                                     Positions[otherSlot],
-                                    separationDistance);
+                                    separationDistance,
+                                    slot,
+                                    otherSlot);
                             }
                         }
                     }
@@ -374,7 +401,9 @@ namespace FlockingSystem.ECS
             float3 boundary = EnemyFlockBoidsMath.CalculateBoundaryForce(position, Config);
             return math.normalizesafe(cohesion, float3.zero) * Config.CohesionWeight
                 + math.normalizesafe(alignment, float3.zero) * Config.AlignmentWeight
-                + math.normalizesafe(separation, float3.zero) * Config.SeparationWeight
+                + EnemyFlockBoidsMath.CalculateSeparationForce(
+                    separation,
+                    Config.SeparationWeight)
                 + math.normalizesafe(goal, float3.zero) * Config.GoalWeight
                 + math.normalizesafe(boundary, float3.zero) * Config.BoundaryWeight;
         }

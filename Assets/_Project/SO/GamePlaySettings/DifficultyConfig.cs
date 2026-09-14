@@ -5,6 +5,11 @@ namespace GameSystem
     [CreateAssetMenu(fileName = "DifficultyConfig", menuName = "Game/Difficulty Config")]
     public class DifficultyConfig : ScriptableObject
     {
+        [Header("数量难度")]
+        [SerializeField] private DifficultyLevel level = DifficultyLevel.Easy;
+
+        /// <summary>数量配额与初始轨道半径使用同一难度序号。</summary>
+        public DifficultyLevel Level => level;
         [Header("Identity")]
         [SerializeField] private string difficultyId = "normal";
 

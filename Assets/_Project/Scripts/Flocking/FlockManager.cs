@@ -4,14 +4,14 @@ using System.Collections.Generic;
 namespace FlockingSystem
 {
     /// <summary>
-    /// 通用群游管理器 — 纯逻辑模块,与其他系统完全解耦。
+    /// 通用群游管理器，维护非 ECS 代理的目标位置和活动边界。
     ///
     /// 管理一组 FlockAgent 的群游行为：
     /// - 随机游走目标点
     /// - 游泳边界约束
     /// - 全局速度控制
     ///
-    /// 不负责生成代理 — 代理由外部系统(EnemySpawnManager/装饰鱼生成器等)
+    /// 不负责生成代理，代理由外部系统(敌人生成器/装饰鱼生成器等)
     /// 通过 <see cref="Register"/> 注册。
     /// Enemy 的 ECS 路径由 EnemyFactory 管理；此处保留 Mono FlockAgent 的回退组和区域参数。
     /// </summary>
@@ -27,8 +27,8 @@ namespace FlockingSystem
 
         #region Public Accessors
 
-        /// <summary>群游趋向目标点（世界坐标）。</summary>
-        public Vector3 GoalPos { get; private set; }
+        /// <summary>群游趋向目标位置（世界坐标）。</summary>
+        public Vector3 GoalPosition { get; private set; }
 
         /// <summary>游泳区域边界（世界坐标 AABB）。</summary>
         public Bounds SwimBounds { get; private set; }
@@ -39,32 +39,41 @@ namespace FlockingSystem
         /// <summary>游泳区域半尺寸。</summary>
         public Vector3 SwimLimits => swimLimits;
 
-        /// <summary>所有已注册的代理列表。</summary>
-        public List<FlockAgent> Agents { get; private set; }
+        /// <summary>所有已注册的群游代理。</summary>
+        public List<FlockAgent> RegisteredAgents { get; private set; }
 
         #endregion
 
         #region Unity Lifecycle
 
-        void Awake()
+        /// <summary>
+        /// 创建非 ECS 群游代理列表。
+        /// </summary>
+        private void Awake()
         {
-            Agents = new List<FlockAgent>(50);
+            RegisteredAgents = new List<FlockAgent>(50);
         }
 
-        void Start()
+        /// <summary>
+        /// 将初始目标位置设置为管理器所在位置。
+        /// </summary>
+        private void Start()
         {
-            GoalPos = transform.position;
+            GoalPosition = transform.position;
 
         }
 
-        void Update()
+        /// <summary>
+        /// 更新游泳边界，并按概率生成新的群游目标位置。
+        /// </summary>
+        private void Update()
         {
             SwimBounds = new Bounds(transform.position, swimLimits * 2f);
 
             // 随机更新目标点
             if (Random.value < goalChangeChance)
             {
-                GoalPos = transform.position + new Vector3(
+                GoalPosition = transform.position + new Vector3(
                     Random.Range(-swimLimits.x, swimLimits.x),
                     Random.Range(-swimLimits.y, swimLimits.y),
                     Random.Range(-swimLimits.z, swimLimits.z));
@@ -79,29 +88,35 @@ namespace FlockingSystem
         /// <summary>
         /// 注册代理到此群组。
         /// </summary>
-        public void Register(FlockAgent agent)
+        public void RegisterAgent(FlockAgent agent)
         {
-            if (agent == null || Agents.Contains(agent)) return;
-            Agents.Add(agent);
+            if (agent == null || RegisteredAgents.Contains(agent))
+            {
+                return;
+            }
+
+            RegisteredAgents.Add(agent);
         }
 
         /// <summary>
         /// 从群组注销代理。
         /// </summary>
-        public void Unregister(FlockAgent agent)
+        public void UnregisterAgent(FlockAgent agent)
         {
-            Agents.Remove(agent);
+            RegisteredAgents.Remove(agent);
         }
 
         /// <summary>
         /// 批量设置所有代理的速度倍率（如冰冻/加速效果）。
         /// </summary>
-        public void SetAllSpeedMultiplier(float multiplier)
+        public void SetAllAgentSpeedMultiplier(float multiplier)
         {
-            foreach (var agent in Agents)
+            foreach (FlockAgent agent in RegisteredAgents)
             {
                 if (agent != null)
+                {
                     agent.SpeedMultiplier = multiplier;
+                }
             }
 
         }
@@ -119,10 +134,12 @@ namespace FlockingSystem
         /// </summary>
         public void CleanupNullAgents()
         {
-            for (int i = Agents.Count - 1; i >= 0; i--)
+            for (int index = RegisteredAgents.Count - 1; index >= 0; index--)
             {
-                if (Agents[i] == null)
-                    Agents.RemoveAt(i);
+                if (RegisteredAgents[index] == null)
+                {
+                    RegisteredAgents.RemoveAt(index);
+                }
             }
         }
 
@@ -130,12 +147,15 @@ namespace FlockingSystem
 
         #region Editor
 
-        void OnDrawGizmosSelected()
+        /// <summary>
+        /// 在选中管理器时绘制游泳边界和当前目标位置。
+        /// </summary>
+        private void OnDrawGizmosSelected()
         {
             Gizmos.color = new Color(1, 0, 0, 0.5f);
             Gizmos.DrawCube(transform.position, swimLimits * 2f);
             Gizmos.color = new Color(0, 1, 0, 1);
-            Gizmos.DrawSphere(GoalPos, 0.2f);
+            Gizmos.DrawSphere(GoalPosition, 0.2f);
         }
 
         #endregion

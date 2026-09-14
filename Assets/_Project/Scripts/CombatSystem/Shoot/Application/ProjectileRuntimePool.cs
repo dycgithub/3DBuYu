@@ -3,30 +3,45 @@ using System.Collections.Generic;
 
 namespace CombatSystem
 {
+    /// <summary>复用投射物运行时状态对象，避免飞行过程中反复分配。</summary>
     public sealed class ProjectileRuntimePool : IDisposable
     {
         private readonly Queue<ProjectileRuntime> _available = new();
 
-        public ProjectileRuntime Rent(ProjectileInfo info, UnityEngine.GameObject view)
+        /// <summary>租借并初始化一个投射物运行时状态。</summary>
+        /// <param name="projectileData">投射物数据快照。</param>
+        /// <param name="projectileViewInstance">绑定的视觉实例。</param>
+        /// <returns>可用于模拟的投射物运行时状态。</returns>
+        public ProjectileRuntime Rent(
+            ProjectileData projectileData,
+            UnityEngine.GameObject projectileViewInstance)
         {
             if (_available.Count == 0)
-                return new ProjectileRuntime(info, view);
+            {
+                return new ProjectileRuntime(projectileData, projectileViewInstance);
+            }
 
-            ProjectileRuntime runtime = _available.Dequeue();
-            runtime.Initialize(info, view);
-            return runtime;
+            ProjectileRuntime projectileRuntime = _available.Dequeue();
+            projectileRuntime.Initialize(projectileData, projectileViewInstance);
+            return projectileRuntime;
         }
 
-        public void Return(ProjectileRuntime runtime)
+        /// <summary>归还投射物运行时状态对象。</summary>
+        /// <param name="projectileRuntime">要归还的投射物运行时状态。</param>
+        public void Return(ProjectileRuntime projectileRuntime)
         {
-            if (runtime == null)
+            if (projectileRuntime == null)
+            {
                 return;
-            runtime.Reset();
-            _available.Enqueue(runtime);
+            }
+            projectileRuntime.ResetForReuse();
+            _available.Enqueue(projectileRuntime);
         }
 
-        public void Clear() => _available.Clear();
+        /// <summary>清空可复用状态对象队列。</summary>
+        public void ClearAvailableRuntimes() => _available.Clear();
 
-        public void Dispose() => Clear();
+        /// <summary>释放对象池持有的状态引用。</summary>
+        public void Dispose() => ClearAvailableRuntimes();
     }
 }

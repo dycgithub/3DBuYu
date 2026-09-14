@@ -14,7 +14,13 @@ namespace FlockingSystem.ECS
     /// </summary>
     internal static class EnemyFlockGridMath
     {
-        public static int3 GetCell(float3 position, in EnemyFlockWorldConfig config)
+        /// <summary>
+        /// 将世界坐标转换为受边界限制的网格坐标。
+        /// </summary>
+        /// <param name="position">要转换的世界坐标。</param>
+        /// <param name="config">网格原点、单元尺寸和维度配置。</param>
+        /// <returns>对应的三维网格坐标。</returns>
+        public static int3 CalculateCellCoordinates(float3 position, in EnemyFlockWorldConfig config)
         {
             float cellSize = math.max(config.GridCellSize, 0.0001f);
             int3 dimensions = math.max(config.GridDimensions, new int3(1));
@@ -23,9 +29,15 @@ namespace FlockingSystem.ECS
             return math.clamp(cell, int3.zero, maxCell);
         }
 
-        public static int GetCellIndex(float3 position, in EnemyFlockWorldConfig config)
+        /// <summary>
+        /// 将世界坐标转换为一维网格单元索引。
+        /// </summary>
+        /// <param name="position">要转换的世界坐标。</param>
+        /// <param name="config">网格原点、单元尺寸和维度配置。</param>
+        /// <returns>对应的一维网格索引。</returns>
+        public static int CalculateCellIndex(float3 position, in EnemyFlockWorldConfig config)
         {
-            int3 cell = GetCell(position, config);
+            int3 cell = CalculateCellCoordinates(position, config);
             return cell.x + config.GridDimensions.x
                 * (cell.y + config.GridDimensions.y * cell.z);
         }
@@ -86,7 +98,9 @@ namespace FlockingSystem.ECS
             {
                 int slot = bridgeIndices[entityIndex].Value;
                 if ((uint)slot >= (uint)AgentCapacity)
+                {
                     continue;
+                }
 
                 EnemyFlockAgent agent = agents[entityIndex];
                 float3 velocity = agent.Velocity;
@@ -127,16 +141,22 @@ namespace FlockingSystem.ECS
             int agentCapacity = math.min(AgentCapacity, Active.Length);
 
             for (int cell = 0; cell < cellCount; cell++)
+            {
                 CellCounts[cell] = 0;
+            }
 
             for (int slot = 0; slot < agentCapacity; slot++)
             {
                 if (Active[slot] == 0)
+                {
                     continue;
+                }
 
-                int cell = EnemyFlockGridMath.GetCellIndex(Positions[slot], Config);
+                int cell = EnemyFlockGridMath.CalculateCellIndex(Positions[slot], Config);
                 if ((uint)cell < (uint)cellCount)
+                {
                     CellCounts[cell]++;
+                }
             }
 
             int cursor = 0;
@@ -153,11 +173,15 @@ namespace FlockingSystem.ECS
             for (int slot = 0; slot < agentCapacity; slot++)
             {
                 if (Active[slot] == 0)
+                {
                     continue;
+                }
 
-                int cell = EnemyFlockGridMath.GetCellIndex(Positions[slot], Config);
+                int cell = EnemyFlockGridMath.CalculateCellIndex(Positions[slot], Config);
                 if ((uint)cell < (uint)cellCount)
+                {
                     SortedSlots[CellWriteHeads[cell]++] = slot;
+                }
             }
         }
     }

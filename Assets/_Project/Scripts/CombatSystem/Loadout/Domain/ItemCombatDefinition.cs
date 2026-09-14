@@ -2,41 +2,61 @@ using UnityEngine;
 
 namespace CombatSystem
 {
+    /// <summary>
+    /// 物品在战斗系统中的静态配置，定义作用范围、技能授予和发射器修正。
+    /// </summary>
     [CreateAssetMenu(menuName = "Combat/Item Combat Definition")]
-    public sealed class ItemCombatDefinition : ScriptableObject
+    public sealed class ItemCombatDefinitionSO : ScriptableObject
     {
-        [SerializeField] private CombatScope scope = CombatScope.CentralOrTransmitter;
-        [Min(0f)] [SerializeField] private float transmitterDamageBonus = 50f;
-        [SerializeField] private SkillDefinition centralSkill;
-        [Min(0f)] [SerializeField] private float centralDamage = 50f;
-        [SerializeField] private TransmitterShootModifierDefinition[] transmitterModifiers;
+        [SerializeField] private CombatScope combatScope = CombatScope.CentralAndTransmitter;
+        [Min(0f)] [SerializeField] private float transmitterAdditiveDamageBonus;
+        [SerializeField] private ProjectileProfileSO transmitterProjectileProfile;
+        [SerializeField] private SkillGrant centralSkillGrant;
+        [SerializeField] private TransmitterAttackModifierDefinitionSO[] transmitterAttackModifierDefinitions;
 
-        private static ItemCombatDefinition _default;
+        private static ItemCombatDefinitionSO _runtimeFallback;
 
-        public CombatScope Scope => scope;
-        public float TransmitterDamageBonus => transmitterDamageBonus;
-        public SkillDefinition CentralSkill => centralSkill;
-        public float CentralDamage => centralDamage;
-        public TransmitterShootModifierDefinition[] TransmitterModifiers => transmitterModifiers;
+        public CombatScope CombatScope => combatScope;
+        public float TransmitterAdditiveDamageBonus => transmitterAdditiveDamageBonus;
+        public ProjectileProfileSO TransmitterProjectileProfile => transmitterProjectileProfile;
+        public SkillGrant CentralSkillGrant => centralSkillGrant;
+        public TransmitterAttackModifierDefinitionSO[] TransmitterAttackModifierDefinitions
+            => transmitterAttackModifierDefinitions;
 
-        public bool AppliesToCentral => scope == CombatScope.CentralOrTransmitter || scope == CombatScope.Central;
-        public bool AppliesToTransmitter => scope == CombatScope.CentralOrTransmitter || scope == CombatScope.Transmitter;
+        public bool AppliesToCentralLoadout
+            => combatScope == CombatScope.CentralAndTransmitter || combatScope == CombatScope.Central;
 
-        public static ItemCombatDefinition Default
+        public bool AppliesToTransmitterLoadout
+            => combatScope == CombatScope.CentralAndTransmitter || combatScope == CombatScope.Transmitter;
+
+        /// <summary>获取没有额外技能授予的共享回退配置。</summary>
+        public static ItemCombatDefinitionSO RuntimeFallback
         {
             get
             {
-                if (_default != null)
-                    return _default;
+                if (_runtimeFallback != null)
+                {
+                    return _runtimeFallback;
+                }
 
-                _default = CreateInstance<ItemCombatDefinition>();
-                _default.name = "RuntimeItemCombatDefinition";
-                _default.scope = CombatScope.CentralOrTransmitter;
-                _default.transmitterDamageBonus = 50f;
-                _default.centralDamage = 50f;
-                _default.centralSkill = SkillDefinition.CreateRuntime("central-sweep", 50f);
-                return _default;
+                _runtimeFallback = CreateInstance<ItemCombatDefinitionSO>();
+                _runtimeFallback.name = "RuntimeItemCombatDefinition";
+                _runtimeFallback.combatScope = CombatScope.CentralAndTransmitter;
+                _runtimeFallback.transmitterAdditiveDamageBonus = 50f;
+                return _runtimeFallback;
             }
+        }
+
+        /// <summary>创建未保存的战斗配置，供测试和占位配置使用。</summary>
+        public static ItemCombatDefinitionSO CreateRuntime(
+            CombatScope scope,
+            SkillGrant skillGrant)
+        {
+            ItemCombatDefinitionSO definition = CreateInstance<ItemCombatDefinitionSO>();
+            definition.name = "RuntimeItemCombatDefinition";
+            definition.combatScope = scope;
+            definition.centralSkillGrant = skillGrant;
+            return definition;
         }
     }
 }

@@ -18,7 +18,6 @@ namespace Play
     public class PhysicsCentralDetector : MonoBehaviour
     {
         [Header("探测")]
-        [SerializeField] public float detectionRadius = 15f;
         [SerializeField] public LayerMask enemyLayerMask = -1;
 
         [Header("目标选择")]
@@ -32,7 +31,7 @@ namespace Play
         private readonly List<IDamageable> _cached = new List<IDamageable>(128);
         private readonly List<IDamageable> _sortedTargets = new List<IDamageable>(128);
         private readonly HashSet<IDamageable> _uniqueTargets = new HashSet<IDamageable>();
-        private CentralAttributes _attributes;
+        private float _detectionRadius;
 
         public TargetingMode TargetingMode
         {
@@ -42,8 +41,7 @@ namespace Play
 
         public int PortCount => _targets.Length;
 
-        private float EffectiveDetectionRadius
-            => _attributes != null ? _attributes.DetectionRadius : Mathf.Max(0f, detectionRadius);
+        private float EffectiveDetectionRadius => _detectionRadius;
 
         private void Awake()
         {
@@ -51,25 +49,24 @@ namespace Play
             UseEnemyLayerWhenAvailable();
         }
 
-        /// <summary>由中心炮台一次性绑定运行时属性和端口数量。</summary>
-        public void Initialize(int portCount, CentralAttributes attributes)
+        /// <summary>由中心炮台一次性绑定探测半径和端口数量。</summary>
+        /// <param name="portCount">需要保存目标的端口数量。</param>
+        /// <param name="detectionRadius">中心配置提供的探测半径，单位为世界单位。</param>
+        public void Initialize(int portCount, float detectionRadius)
         {
-            BindAttributes(attributes);
+            _detectionRadius = Mathf.Max(0f, detectionRadius);
             SetPortCount(portCount);
             EnsureDetectionBuffer();
             UseEnemyLayerWhenAvailable();
-        }
-
-        public void BindAttributes(CentralAttributes attributes)
-        {
-            _attributes = attributes;
         }
 
         public void SetPortCount(int count)
         {
             count = Mathf.Max(0, count);
             if (_targets.Length != count)
+            {
                 _targets = new IDamageable[count];
+            }
         }
 
         public bool HasTarget(int index)
@@ -103,11 +100,15 @@ namespace Play
             {
                 Collider collider = _detectionBuffer[i];
                 if (collider == null)
+                {
                     continue;
+                }
 
                 IDamageable damageable = collider.GetComponentInParent<IDamageable>();
                 if (damageable.IsAliveAndValid() && _uniqueTargets.Add(damageable))
+                {
                     _cached.Add(damageable);
+                }
             }
         }
 
@@ -125,7 +126,9 @@ namespace Play
 
                 // 返回容量表示缓冲区可能被填满，扩大后重新查询，避免静默丢失敌人。
                 if (hitCount < _detectionBuffer.Length)
+                {
                     return hitCount;
+                }
 
                 int nextCapacity = Mathf.Max(_detectionBuffer.Length * 2, _detectionBuffer.Length + 1);
                 System.Array.Resize(ref _detectionBuffer, nextCapacity);
@@ -136,18 +139,24 @@ namespace Play
         {
             int capacity = Mathf.Max(16, initialBufferCapacity);
             if (_detectionBuffer == null || _detectionBuffer.Length == 0)
+            {
                 _detectionBuffer = new Collider[capacity];
+            }
         }
 
         private void UseEnemyLayerWhenAvailable()
         {
             // -1 表示未指定过滤层。Enemy 层存在时使用它，否则保留全层查询，避免把 -1 左移造成错误掩码。
             if (enemyLayerMask.value != -1)
+            {
                 return;
+            }
 
             int enemyLayer = LayerMask.NameToLayer("Enemy");
             if (enemyLayer >= 0)
+            {
                 enemyLayerMask = 1 << enemyLayer;
+            }
         }
 
         private void AssignTargets()
@@ -170,7 +179,9 @@ namespace Play
         {
             IDamageable nearest = FindNearest();
             for (int i = 0; i < _targets.Length; i++)
+            {
                 _targets[i] = nearest;
+            }
         }
 
         private void AssignDistributed()
@@ -184,9 +195,13 @@ namespace Play
             for (int i = 0; i < _targets.Length; i++)
             {
                 if (_sortedTargets.Count == 0)
+                {
                     _targets[i] = null;
+                }
                 else
+                {
                     _targets[i] = _sortedTargets[Mathf.Min(i, _sortedTargets.Count - 1)];
+                }
             }
         }
 
@@ -199,7 +214,9 @@ namespace Play
             {
                 IDamageable target = _cached[i];
                 if (!target.IsAliveAndValid())
+                {
                     continue;
+                }
 
                 float threat = target is ILockable lockable ? lockable.ThreatLevel : 0f;
                 if (primary == null || threat > highestThreat)
@@ -210,10 +227,14 @@ namespace Play
             }
 
             if (primary == null)
+            {
                 primary = FindNearest();
+            }
 
             for (int i = 0; i < _targets.Length; i++)
+            {
                 _targets[i] = primary;
+            }
         }
 
         private IDamageable FindNearest()
@@ -226,7 +247,9 @@ namespace Play
             {
                 IDamageable target = _cached[i];
                 if (!target.IsAliveAndValid())
+                {
                     continue;
+                }
 
                 float distance = SqrDistance(origin, target.Position);
                 if (distance < nearestDistance)
@@ -252,7 +275,9 @@ namespace Play
         private void OnDrawGizmosSelected()
         {
             if (!showDetectionGizmos)
+            {
                 return;
+            }
 
             Gizmos.color = detectionSphereColor;
             Gizmos.DrawSphere(transform.position, EffectiveDetectionRadius);

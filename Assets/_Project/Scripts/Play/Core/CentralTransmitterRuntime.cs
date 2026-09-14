@@ -17,37 +17,34 @@ namespace Play
 
         public TransmitterSO So { get; }
         public int PortIndex { get; }
-        public int TransmitterIndex => PortIndex;
         public string TransmitterId { get; }
         public string PortId { get; }
         public Transform FirePoint { get; private set; }
-        public TransmitterAttributes Attributes { get; }
         public bool IsLocked { get; private set; }
 
         public CentralTransmitterRuntime(
             TransmitterSO so,
             int index,
             Transform parent,
-            IObjectResolver resolver,
-            TransmitterAttributes templateAttributes = null)
+            IObjectResolver resolver)
         {
             So = so ?? throw new ArgumentNullException(nameof(so));
             if (parent == null)
+            {
                 throw new ArgumentNullException(nameof(parent));
+            }
 
             PortIndex = index;
             TransmitterId = string.IsNullOrWhiteSpace(so.portName) ? $"Transmitter_{index}" : so.portName;
-            PortId = $"{parent.name}_Transmitter{index}_{TransmitterId}";
+            PortId = string.IsNullOrWhiteSpace(so.portId)
+                ? $"port-{index}"
+                : so.portId;
             _resolver = resolver;
             IsLocked = so.isInitiallyLocked;
 
             GameObject firePointObject = new GameObject(PortId);
             firePointObject.transform.SetParent(parent, false);
             FirePoint = firePointObject.transform;
-
-            Attributes = templateAttributes != null
-                ? new TransmitterAttributes(templateAttributes)
-                : new TransmitterAttributes();
 
             InstantiateModel(FirePoint);
         }
@@ -56,7 +53,9 @@ namespace Play
         public void Unlock()
         {
             if (_disposed || !IsLocked)
+            {
                 return;
+            }
 
             IsLocked = false;
             ReplaceLockedModelWithNormalModel();
@@ -69,7 +68,9 @@ namespace Play
         public void AlignToSphere(Vector3 sphereCenter, float capHeight)
         {
             if (_disposed || FirePoint == null)
+            {
                 return;
+            }
 
             Vector3 turretPosition = FirePoint.parent != null
                 ? FirePoint.parent.position
@@ -103,7 +104,9 @@ namespace Play
                 : So.portModelPrefab;
 
             if (prefab == null || parent == null)
+            {
                 return;
+            }
 
             _modelInstance = _resolver != null
                 ? _resolver.Instantiate(prefab, parent)
@@ -111,13 +114,15 @@ namespace Play
 
             _modelInstance.transform.localPosition = Vector3.zero;
             _modelInstance.transform.localRotation = Quaternion.identity;
-            _modelInstance.SetActive(!IsLocked);
+            _modelInstance.SetActive(!IsLocked || So.lockedModelPrefab != null);
         }
 
         public void Dispose()
         {
             if (_disposed)
+            {
                 return;
+            }
 
             _disposed = true;
             if (_modelInstance != null)
@@ -136,12 +141,18 @@ namespace Play
         private static void DestroyUnityObject(UnityEngine.Object target)
         {
             if (target == null)
+            {
                 return;
+            }
 
             if (Application.isPlaying)
+            {
                 UnityEngine.Object.Destroy(target);
+            }
             else
+            {
                 UnityEngine.Object.DestroyImmediate(target);
+            }
         }
     }
 }

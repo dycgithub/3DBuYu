@@ -1,8 +1,8 @@
+using System.Collections;
 using System.Collections.Generic;
 using Services;
 using UnityEngine;
 using UnityEngine.Audio;
-using VContainer;
 
 namespace GameSystem
 {
@@ -45,7 +45,7 @@ namespace GameSystem
         [Range(0f, 1f)]
         public float pauseVolumeMultiplier = 0.3f;
 
-        [Inject] private IGamePauseService _pauseService;
+        private IGamePauseService _pauseService;
 
         private AudioSource bgmSource;
         private readonly List<AudioSource> sfxSources = new();
@@ -67,17 +67,46 @@ namespace GameSystem
         {
             LoadSettings();
 
-            if (_pauseService != null)
-            {
-                _pauseService.PauseStateChanged += HandlePauseStateChanged;
-                HandlePauseStateChanged(_pauseService.IsPaused);
-            }
+            HandlePauseStateChanged(_pauseService != null && _pauseService.IsPaused);
         }
 
         private void OnDestroy()
         {
+            UnbindPauseService();
+        }
+
+        /// <summary>
+        /// 由 GameLoop 子容器绑定本局暂停服务，避免全局音频对象依赖短生命周期对象。
+        /// </summary>
+        public void BindPauseService(IGamePauseService pauseService)
+        {
+            if (ReferenceEquals(_pauseService, pauseService))
+            {
+                HandlePauseStateChanged(pauseService != null && pauseService.IsPaused);
+                return;
+            }
+
+            UnbindPauseService();
+            _pauseService = pauseService;
+            if (_pauseService == null)
+                return;
+
+            _pauseService.PauseStateChanged += HandlePauseStateChanged;
+            HandlePauseStateChanged(_pauseService.IsPaused);
+        }
+
+        /// <summary>仅解除当前 GameLoop 的暂停服务绑定。</summary>
+        public void UnbindPauseService(IGamePauseService pauseService)
+        {
+            if (ReferenceEquals(_pauseService, pauseService))
+                UnbindPauseService();
+        }
+
+        private void UnbindPauseService()
+        {
             if (_pauseService != null)
                 _pauseService.PauseStateChanged -= HandlePauseStateChanged;
+            _pauseService = null;
         }
 
         private void HandlePauseStateChanged(bool isPaused)
@@ -170,7 +199,7 @@ namespace GameSystem
             };
         }
 
-        private System.Collections.IEnumerator FadeBGM(AudioClip newClip)
+        private IEnumerator FadeBGM(AudioClip newClip)
         {
             float startVolume = bgmSource.volume;
             float elapsed = 0f;
@@ -197,7 +226,7 @@ namespace GameSystem
             ApplyBgmPlaybackVolume();
         }
 
-        private System.Collections.IEnumerator FadeOutBGM()
+        private IEnumerator FadeOutBGM()
         {
             float startVolume = bgmSource.volume;
             float elapsed = 0f;
@@ -300,7 +329,7 @@ namespace GameSystem
             StartCoroutine(ReturnSFXSource(source, playbackLength, leaseId));
         }
 
-        private System.Collections.IEnumerator ReturnSFXSource(AudioSource source, float delay, int leaseId)
+        private IEnumerator ReturnSFXSource(AudioSource source, float delay, int leaseId)
         {
             yield return new WaitForSecondsRealtime(delay);
 

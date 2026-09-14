@@ -19,12 +19,9 @@ namespace Play
         public TransmitterSO[] Transmitters;
 
         [Header("基础属性")]
-        [Tooltip("球体探测半径（所有端口共用）。")]
+        [Tooltip("球体探测半径（所有端口共用），单位为世界单位。")]
+        [Min(0f)]
         public float detectionRadius = 10f;
-        public float baseRange = 15f;
-        public float baseFireRate = 1f;
-        public float baseRotationSpeed = 180f;
-        public int baseProjectileCount = 1;
 
         [Header("球冠")]
         [Tooltip("球冠高度。Turret 位于球冠顶点，port 分布在球冠底面圆周上。运行时会根据当前星球半径自动限制在有效范围内。")]

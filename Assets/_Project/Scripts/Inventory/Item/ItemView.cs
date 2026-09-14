@@ -9,13 +9,17 @@ using VContainer;
 /// <summary>
 /// - 逐格形状渲染:每个形状点 = 一个小方块,T形显示成T形,旋转时方块跟着转
 /// - 拖拽/旋转/放置/跨网格:数据走 TetrisItemVM,松手 RaycastAll 找目标网格
+/// - 指针悬停和选中:把交互状态转发给 ItemOutlineView,由轮廓组件统一绘制
+/// - 指针按压:把按下/抬起表现转发给 ItemPressEffect,不改变网格定位
 /// 外壳 Image 作为拖拽热区(可放底图,不放则只有形状方块可见)。
 /// </summary>
 [RequireComponent(typeof(Image))]
 public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler,
-    IPointerDownHandler, IPointerClickHandler, IPointerEnterHandler, IPointerExitHandler, IPointerMoveHandler
+    IPointerDownHandler, IPointerUpHandler, IPointerClickHandler, IPointerEnterHandler,
+    IPointerExitHandler, IPointerMoveHandler
 {
     private RectTransform rect;
+    private RectTransform visualRoot;
     private bool isDragging;
     private int originCol, originRow;
     private Dir originDir;   // 拖拽前的方向快照,回退时用于还原
@@ -24,6 +28,7 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
     private GridView lastHighlightGrid;
     private List<Image> cells = new();
     private ItemOutlineView outline;
+    private ItemPressEffect pressEffect;
 
     public ItemVM ItemVM { get; private set; }
     public GridView OwnerGrid { get; private set; }
@@ -38,6 +43,15 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
     private void Awake()
     {
         rect = GetComponent<RectTransform>();
+        pressEffect = GetComponent<ItemPressEffect>();
+        visualRoot = pressEffect != null
+            ? pressEffect.VisualRoot
+            : transform.Find("VisualRoot") as RectTransform;
+        if (visualRoot == null)
+        {
+            visualRoot = rect;
+        }
+
         outline = GetComponentInChildren<ItemOutlineView>(true);
     }
 
@@ -50,6 +64,7 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         rect.anchorMax = new Vector2(0f, 1f);
         rect.pivot = new Vector2(0f, 1f);
         rect.sizeDelta = grid.SizeFor(item);
+        ConfigureVisualRoot();
         EnsureOutline();
         RebuildCells();
         PlaceAt(col, row);
@@ -89,8 +104,9 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         if (ItemVM == null || OwnerGrid == null)
             return;
 
+        ConfigureVisualRoot();
         ClearCells();
-        cells.AddRange(BuildCells(rect, ItemVM.CoordinateSet, ItemVM.RotationOffset,
+        cells.AddRange(BuildCells(visualRoot, ItemVM.CoordinateSet, ItemVM.RotationOffset,
             OwnerGrid.CellSize, OwnerGrid.Step,
             ResolveSprite(ItemVM, OwnerGrid.CellSprite),
             ResolveColor(ItemVM, OwnerGrid.CellColor)));
@@ -130,8 +146,22 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
             return;
 
         var go = new GameObject("ItemOutline", typeof(RectTransform), typeof(ItemOutlineView));
-        go.transform.SetParent(rect, false);
+        go.transform.SetParent(visualRoot, false);
         outline = go.GetComponent<ItemOutlineView>();
+    }
+
+    private void ConfigureVisualRoot()
+    {
+        if (visualRoot == null)
+        {
+            return;
+        }
+
+        visualRoot.anchorMin = new Vector2(0f, 1f);
+        visualRoot.anchorMax = new Vector2(0f, 1f);
+        visualRoot.pivot = new Vector2(0f, 1f);
+        visualRoot.anchoredPosition = Vector2.zero;
+        visualRoot.sizeDelta = rect.sizeDelta;
     }
 
     private void ClearCells()
@@ -180,6 +210,14 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
     public void OnPointerDown(PointerEventData eventData)
     {
         _selection?.Select(this);
+        pressEffect ??= GetComponent<ItemPressEffect>();
+        pressEffect?.Press();
+    }
+
+    public void OnPointerUp(PointerEventData eventData)
+    {
+        pressEffect ??= GetComponent<ItemPressEffect>();
+        pressEffect?.Release();
     }
 
     public void OnPointerClick(PointerEventData eventData)
@@ -189,6 +227,7 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
 
     public void OnPointerEnter(PointerEventData eventData)
     {
+        SetHovered(true);
         _tooltip?.ShowHover(this, eventData.position);
     }
 
@@ -199,11 +238,20 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
 
     public void OnPointerExit(PointerEventData eventData)
     {
+        SetHovered(false);
         _tooltip?.HideHover(this);
+    }
+
+    /// <summary>设置物品轮廓的悬停状态。</summary>
+    private void SetHovered(bool hovered)
+    {
+        EnsureOutline();
+        outline.SetHovered(hovered);
     }
 
     public void OnBeginDrag(PointerEventData eventData)
     {
+        pressEffect?.Cancel();
         _selection?.Select(this);
         _tooltip?.HideHover(this);
         isDragging = true;
@@ -212,9 +260,11 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         originDir = ItemVM.Direction;
         pointerCamera = eventData.pressEventCamera;
 
-        if (OwnerGrid == null || !OwnerGrid.DetachItem(ItemVM))
+        _inventory.SetDragging(this);
+        if (OwnerGrid == null || !OwnerGrid.DetachItem(ItemVM, false))
         {
             isDragging = false;
+            _inventory.SetDragging(null);
             return;
         }
 
@@ -223,7 +273,6 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         ghost = go.AddComponent<ItemGhostView>();
         ghost.Init(OwnerGrid, ItemVM);
 
-        _inventory.SetDragging(this);
         RefreshGhost(eventData.position);
     }
 
@@ -238,6 +287,8 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         if (!isDragging) return;
         isDragging = false;
 
+        GridView sourceGrid = OwnerGrid;
+
         _inventory.SetDragging(null);
 
         bool placed = false;
@@ -247,6 +298,10 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
             target.CanPlace(ItemVM, targetCol, targetRow))
         {
             placed = TryCompleteDrop(target, targetCol, targetRow);
+
+            // 跨网格移动时目标网格已发事件，源网格需要补一次最终状态同步。
+            if (placed && sourceGrid != null && sourceGrid != OwnerGrid)
+                sourceGrid.NotifyItemsChanged();
         }
 
         if (!placed)

@@ -23,10 +23,5 @@ namespace Interfaces
         /// </summary>
         Transform Transform { get; }
 
-        /// <summary>
-        /// 对实体造成伤害。
-        /// </summary>
-        /// <param name="amount">伤害值。</param>
-        void TakeDamage(float amount);
     }
 }

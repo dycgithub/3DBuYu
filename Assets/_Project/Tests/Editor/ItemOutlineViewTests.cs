@@ -1,9 +1,23 @@
 using System.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.UI;
 
 public sealed class ItemOutlineViewTests
 {
+    private static readonly Color NormalColor = new(1f, 1f, 1f, 0.35f);
+    private static readonly Color HoverColor = new(0.2f, 1f, 0.2f, 1f);
+    private static readonly Color SelectedColor = new(1f, 0.85f, 0.15f, 1f);
+
+    private GameObject _testObject;
+
+    [TearDown]
+    public void TearDown()
+    {
+        if (_testObject != null)
+            Object.DestroyImmediate(_testObject);
+    }
+
     [Test]
     public void SquareShape_OnlyHasFourExternalSegments()
     {
@@ -56,5 +70,55 @@ public sealed class ItemOutlineViewTests
         Assert.That(segments.All(segment => segment.Line >= 3), Is.True);
         Assert.That(segments.Any(segment => !segment.Horizontal && segment.Line == 3), Is.True);
         Assert.That(segments.Any(segment => segment.Horizontal && segment.Line == 4), Is.True);
+    }
+
+    [Test]
+    public void HoveredOutline_UsesGreenStyle()
+    {
+        ItemOutlineView outline = CreateOutline();
+        outline.Rebuild(new[] { Vector2Int.zero }, Vector2Int.zero, 40f, 50f);
+
+        outline.SetHovered(true);
+
+        Assert.That(GetSegmentImages(outline).All(image => image.color == HoverColor), Is.True);
+    }
+
+    [Test]
+    public void SelectedOutline_TakesPriorityOverHoverStyle()
+    {
+        ItemOutlineView outline = CreateOutline();
+        outline.Rebuild(new[] { Vector2Int.zero }, Vector2Int.zero, 40f, 50f);
+
+        outline.SetHovered(true);
+        outline.SetSelected(true);
+
+        Assert.That(GetSegmentImages(outline).All(image => image.color == SelectedColor), Is.True);
+
+        outline.SetHovered(false);
+
+        Assert.That(GetSegmentImages(outline).All(image => image.color == SelectedColor), Is.True);
+    }
+
+    [Test]
+    public void ClearingHover_RestoresNormalOutlineStyle()
+    {
+        ItemOutlineView outline = CreateOutline();
+        outline.Rebuild(new[] { Vector2Int.zero }, Vector2Int.zero, 40f, 50f);
+
+        outline.SetHovered(true);
+        outline.SetHovered(false);
+
+        Assert.That(GetSegmentImages(outline).All(image => image.color == NormalColor), Is.True);
+    }
+
+    private ItemOutlineView CreateOutline()
+    {
+        _testObject = new GameObject("ItemOutlineTest", typeof(RectTransform));
+        return _testObject.AddComponent<ItemOutlineView>();
+    }
+
+    private static Image[] GetSegmentImages(ItemOutlineView outline)
+    {
+        return outline.GetComponentsInChildren<Image>(true);
     }
 }

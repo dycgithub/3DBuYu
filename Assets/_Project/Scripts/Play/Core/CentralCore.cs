@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Serialization;
 using VContainer;
 
 namespace Play
@@ -16,16 +15,8 @@ namespace Play
 
         public CentralSO CentralSoConfig => centralSo;
 
-        private CentralAttributes centralAttributes;
-
         [Header("自身数据")] [SerializeField] private SphereWalker _sphereWalker;
         public SphereWalker SphereWalker => _sphereWalker;
-
-        [Header("发射器背包绑定")]
-        [Tooltip("按 CentralSO.Transmitters 顺序填写发射器背包；不使用物体名称推断映射。")]
-        [SerializeField] private GridView[] transmitterBackpacks;
-
-        [SerializeField] private TransmitterAttributes baseTransmitterAttributes;
 
         [Header("球冠更新")] [Tooltip("端口位置更新间隔帧数（降低开销）。位置发生变化时会立即更新。")] [Min(1)] [SerializeField]
         private int alignIntervalFrames = 5;
@@ -43,12 +34,19 @@ namespace Play
             get
             {
                 if (_portManager == null || _portManager.PortCount == 0)
+                {
                     return 0f;
+                }
 
                 float sum = 0f;
                 IReadOnlyList<CentralTransmitterRuntime> ports = _portManager.Ports;
                 for (int i = 0; i < ports.Count; i++)
-                    sum += ports[i].Attributes.Damage;
+                {
+                    if (ports[i]?.So != null)
+                    {
+                        sum += Mathf.Max(0f, ports[i].So.baseDamage);
+                    }
+                }
 
                 return sum / ports.Count;
             }
@@ -59,14 +57,18 @@ namespace Play
             get
             {
                 if (_portManager == null || _portManager.PortCount == 0)
+                {
                     return 0f;
+                }
 
                 float maxRange = 0f;
                 IReadOnlyList<CentralTransmitterRuntime> ports = _portManager.Ports;
                 for (int i = 0; i < ports.Count; i++)
                 {
-                    if (ports[i].Attributes.Range > maxRange)
-                        maxRange = ports[i].Attributes.Range;
+                    if (ports[i]?.So != null)
+                    {
+                        maxRange = Mathf.Max(maxRange, Mathf.Max(0f, ports[i].So.baseRange));
+                    }
                 }
 
                 return maxRange;
@@ -78,12 +80,19 @@ namespace Play
             get
             {
                 if (_portManager == null || _portManager.PortCount == 0)
+                {
                     return 0f;
+                }
 
                 float sum = 0f;
                 IReadOnlyList<CentralTransmitterRuntime> ports = _portManager.Ports;
                 for (int i = 0; i < ports.Count; i++)
-                    sum += ports[i].Attributes.FireRate;
+                {
+                    if (ports[i]?.So != null)
+                    {
+                        sum += Mathf.Max(0f, ports[i].So.attacksPerSecond);
+                    }
+                }
 
                 return sum / ports.Count;
             }
@@ -126,7 +135,9 @@ namespace Play
         private void Initialize()
         {
             if (_initialized)
+            {
                 return;
+            }
 
             if (centralSo == null || centralSo.Transmitters == null || centralSo.Transmitters.Length == 0)
             {
@@ -135,17 +146,14 @@ namespace Play
             }
 
             if (_sphereWalker == null)
+            {
                 _sphereWalker = GetComponentInParent<SphereWalker>();
+            }
 
             _portManager = new CentralTransmitterManager(
                 centralSo,
                 transform,
-                _resolver,
-                baseTransmitterAttributes);
-            BindTransmitterBackpacks();
-            centralAttributes = new CentralAttributes(
-                centralSo.detectionRadius,
-                centralSo.baseRotationSpeed);
+                _resolver);
 
             CreateCentralModel();
             BindRuntimeComponents();
@@ -155,80 +163,43 @@ namespace Play
         private void CreateCentralModel()
         {
             if (centralSo.modelPrefab == null)
+            {
                 return;
+            }
 
             _turretModel = Instantiate(centralSo.modelPrefab, transform);
             _turretModel.transform.localPosition = Vector3.zero;
             _turretModel.transform.localRotation = Quaternion.identity;
         }
 
-        private void BindTransmitterBackpacks()
-        {
-            int portCount = _portManager != null ? _portManager.PortCount : 0;
-            if (transmitterBackpacks == null || transmitterBackpacks.Length != portCount)
-            {
-                int configuredCount = transmitterBackpacks != null ? transmitterBackpacks.Length : 0;
-                Debug.LogWarning(
-                    $"[CentralCore] {name}: 发射器背包数量 {configuredCount} 与端口数量 {portCount} 不匹配。",
-                    this);
-            }
-
-            var assignedBackpacks = new HashSet<GridView>();
-            int bindCount = Mathf.Min(
-                transmitterBackpacks != null ? transmitterBackpacks.Length : 0,
-                portCount);
-
-            for (int index = 0; index < bindCount; index++)
-            {
-                GridView backpack = transmitterBackpacks[index];
-                if (backpack == null)
-                {
-                    Debug.LogWarning($"[CentralCore] {name}: 发射器索引 {index} 未配置背包。", this);
-                    continue;
-                }
-
-                if (backpack.GridType != GridType.TransmitterBackpack)
-                {
-                    Debug.LogWarning(
-                        $"[CentralCore] {name}: 发射器索引 {index} 引用了非 TransmitterBackpack 网格 {backpack.name}。",
-                        backpack);
-                    continue;
-                }
-
-                if (!assignedBackpacks.Add(backpack))
-                {
-                    Debug.LogWarning(
-                        $"[CentralCore] {name}: 背包 {backpack.name} 被重复分配，跳过索引 {index}。",
-                        backpack);
-                    continue;
-                }
-
-                backpack.AssignTransmitter(index);
-            }
-        }
-
         private void BindRuntimeComponents()
         {
             PhysicsCentralDetector detector = GetComponent<PhysicsCentralDetector>();
             if (detector != null)
-                detector.Initialize(_portManager.PortCount, centralAttributes);
+            {
+                detector.Initialize(_portManager.PortCount, centralSo.detectionRadius);
+            }
 
             IReadOnlyList<CentralTransmitterRuntime> ports = _portManager.Ports;
 
             TransmitterAimController aimController = GetComponent<TransmitterAimController>();
             if (aimController != null)
+            {
                 aimController.Initialize(ports, detector, _sphereWalker);
+            }
 
             TransmitterFireController fireController = GetComponent<TransmitterFireController>();
             if (fireController != null)
+            {
                 fireController.Initialize(this, ports, detector);
+            }
 
-            BindTrajectoryDisplays(detector, fireController, ports);
+            BindTrajectoryDisplays(detector, ports);
         }
 
+        /// <summary>将每个轨迹显示绑定到其所属端口。</summary>
         private void BindTrajectoryDisplays(
             PhysicsCentralDetector detector,
-            TransmitterFireController fireController,
             IReadOnlyList<CentralTransmitterRuntime> ports)
         {
             TransmitterTrajectoryDisplay[] displays =
@@ -241,11 +212,13 @@ namespace Play
                 {
                     CentralTransmitterRuntime port = ports[portIndex];
                     if (port == null || port.FirePoint == null)
+                    {
                         continue;
+                    }
 
                     if (display.transform == port.FirePoint || display.transform.IsChildOf(port.FirePoint))
                     {
-                        display.Initialize(this, detector, fireController, port);
+                        display.Initialize(this, detector, port);
                         break;
                     }
                 }
@@ -255,7 +228,9 @@ namespace Play
         private void UpdateMultiPort()
         {
             if (_portManager == null || _sphereWalker == null)
+            {
                 return;
+            }
 
             Vector3 sphereCenter = _sphereWalker.GetEffectiveCenter();
             bool positionChanged = (_lastAlignPosition - transform.position).sqrMagnitude > 1e-6f;
@@ -267,7 +242,9 @@ namespace Play
                 IReadOnlyList<CentralTransmitterRuntime> ports = _portManager.Ports;
                 float capHeight = centralSo != null ? centralSo.capHeight : 1f;
                 for (int i = 0; i < ports.Count; i++)
+                {
                     ports[i].AlignToSphere(sphereCenter, capHeight);
+                }
 
                 _lastAlignPosition = transform.position;
                 _alignFrameCounter = 0;
@@ -277,7 +254,9 @@ namespace Play
             {
                 Vector3 directionToCenter = sphereCenter - transform.position;
                 if (directionToCenter.sqrMagnitude > 0.0001f)
+                {
                     _turretModel.transform.rotation = Quaternion.LookRotation(directionToCenter.normalized);
+                }
             }
         }
 
@@ -293,12 +272,18 @@ namespace Play
         private static void DestroyUnityObject(UnityEngine.Object target)
         {
             if (target == null)
+            {
                 return;
+            }
 
             if (Application.isPlaying)
+            {
                 UnityEngine.Object.Destroy(target);
+            }
             else
+            {
                 UnityEngine.Object.DestroyImmediate(target);
+            }
         }
     }
 }

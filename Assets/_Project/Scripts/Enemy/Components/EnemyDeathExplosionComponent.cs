@@ -1,113 +1,151 @@
+using CombatSystem;
+using EffectSystem;
+using Interfaces;
+using Services;
 using UnityEngine;
 using VContainer;
-using Services;
-using GameSystem;
-using EffectSystem;
 
 namespace EnemySystem.Components
 {
     /// <summary>
-    /// 坦克敌人死亡爆炸行为(Tank)。
-    /// 死亡时对周围 Player 触发时间惩罚。
-    /// 挂到 Tank 类型敌人预制体上。
+    /// 自爆敌人的死亡范围伤害行为。
+    /// <para>爆炸参数由所属 <see cref="EnemyAttributesSO"/> 提供，伤害仍走统一目标入口。</para>
     /// </summary>
+    [DisallowMultipleComponent]
     [RequireComponent(typeof(Enemy))]
-    public class EnemyDeathExplosionComponent : MonoBehaviour
+    public class EnemyDeathExplosionComponent : MonoBehaviour, IEnemyActivationListener
     {
-        [Header("爆炸")]
-        [Tooltip("爆炸时间惩罚(秒)")]
-        [SerializeField] private float timePenalty = 5f;
-
-        [Tooltip("爆炸检测半径")]
-        [SerializeField] private float explosionRadius = 5f;
-
-        [Tooltip("爆炸范围检测的可复用碰撞体缓冲区容量")]
-        [SerializeField, Min(1)] private int overlapBufferCapacity = 32;
-
         [Header("调试")]
         [SerializeField] private bool showGizmo = true;
 
         [Inject] private IEffectService _effectService;
-        [Inject] private GameManager _gameManager;
+        [Inject] private ISpatialQueryService _spatialService;
+        [Inject] private IPlayerCombatTarget _playerTarget;
 
         private Enemy _enemy;
-        private Collider[] _overlapBuffer;
-        private bool subscribed;
+        private bool _subscribed;
 
+        /// <summary>缓存敌人引用。</summary>
         private void Awake()
         {
             _enemy = GetComponent<Enemy>();
-            _overlapBuffer = new Collider[Mathf.Max(1, overlapBufferCapacity)];
         }
 
+        /// <summary>注册死亡事件。</summary>
         private void OnEnable()
         {
-            if (_overlapBuffer == null)
-                _overlapBuffer = new Collider[Mathf.Max(1, overlapBufferCapacity)];
-
             _enemy ??= GetComponent<Enemy>();
-            if (_enemy != null && !subscribed)
+            if (_enemy != null && !_subscribed)
             {
                 _enemy.OnDied += HandleDeath;
-                subscribed = true;
+                _subscribed = true;
             }
         }
 
+        /// <summary>注销死亡事件，避免对象池实例重复订阅。</summary>
         private void OnDisable()
         {
-            if (_enemy != null && subscribed)
+            if (_enemy != null && _subscribed)
             {
                 _enemy.OnDied -= HandleDeath;
-                subscribed = false;
+                _subscribed = false;
             }
         }
 
+        /// <summary>对范围内敌人和玩家造成一次爆炸伤害。</summary>
+        /// <param name="enemy">触发死亡事件的敌人。</param>
         private void HandleDeath(Enemy enemy)
         {
-            // 范围检测玩家。死亡高频发生时复用缓冲区，避免 OverlapSphere 分配数组。
-            int hitCount = QueryOverlappingColliders();
-            bool hitPlayer = false;
-            for (int i = 0; i < hitCount; i++)
+            if (enemy == null || enemy.DeathCause == EnemyDeathCause.Consumed)
             {
-                Collider hit = _overlapBuffer[i];
-                if (hit != null && hit.CompareTag("Player"))
-                {
-                    hitPlayer = true;
-                    break;
-                }
+                return;
             }
 
-            if (hitPlayer && _gameManager != null && _gameManager.CurrentState == GameState.Playing)
-                _gameManager.Timer?.AddTimePenalty(timePenalty);
+            EnemyAttributesSO attributes = enemy.Attributes;
+            float radius = attributes != null ? Mathf.Max(0f, attributes.explosionRadius) : 0f;
+            float damage = attributes != null ? Mathf.Max(0f, attributes.explosionDamage) : 0f;
+            if (radius > 0f && damage > 0f)
+            {
+                if (_spatialService != null)
+                {
+                    var targets = _spatialService.QueryRadius(
+                        transform.position,
+                        radius,
+                        SpatialSystem.Bridge.SpatialRegistry.LAYER_ENEMY);
+                    for (int index = 0; index < targets.Count; index++)
+                    {
+                        if (targets[index] is not Enemy targetEnemy || targetEnemy != enemy)
+                        {
+                            ApplyDamage(targets[index], damage);
+                        }
+                    }
+                }
+
+                if (_playerTarget != null &&
+                    _playerTarget.Transform != null &&
+                    Vector3.Distance(_playerTarget.Transform.position, transform.position) <= radius)
+                {
+                    ApplyDamage(_playerTarget, damage);
+                }
+            }
 
             _effectService?.Play(EffectId.BigExplosion, transform.position);
         }
 
-        private int QueryOverlappingColliders()
+        /// <summary>提交一次范围伤害请求。</summary>
+        private void ApplyDamage(IDamageable target, float damage)
         {
-            int hitCount;
-            do
+            if (target is not IDamageRequestReceiver receiver || !target.IsAliveAndValid())
             {
-                hitCount = Physics.OverlapSphereNonAlloc(
-                    transform.position,
-                    explosionRadius,
-                    _overlapBuffer,
-                    Physics.AllLayers,
-                    QueryTriggerInteraction.UseGlobal);
-
-                if (hitCount < _overlapBuffer.Length)
-                    return hitCount;
-
-                System.Array.Resize(ref _overlapBuffer, _overlapBuffer.Length * 2);
+                return;
             }
-            while (true);
+
+            receiver.ReceiveDamageRequest(new DamageRequest
+            {
+                SourceInstanceId = _enemy != null ? _enemy.GetInstanceID() : 0,
+                DamageAmount = damage,
+                DamageType = DamageType.Physical,
+                HitPosition = target.Position,
+                HitNormal = Vector3.up
+            });
         }
 
+        /// <summary>响应宿主广播，补做死亡事件订阅。</summary>
+        void IEnemyActivationListener.OnEnemyActivationReady()
+        {
+            if (!isActiveAndEnabled)
+            {
+                return;
+            }
+
+            _enemy ??= GetComponent<Enemy>();
+            if (_enemy != null && !_subscribed)
+            {
+                _enemy.OnDied += HandleDeath;
+                _subscribed = true;
+            }
+        }
+
+        /// <summary>在编辑器中显示来自敌人配置的爆炸范围。</summary>
         private void OnDrawGizmosSelected()
         {
-            if (!showGizmo) return;
+            if (!showGizmo)
+            {
+                return;
+            }
+
+            Enemy enemy = GetComponent<Enemy>();
+            float radius = enemy != null && enemy.Attributes != null
+                ? Mathf.Max(0f, enemy.Attributes.explosionRadius)
+                : 0f;
+            if (radius <= 0f)
+            {
+                return;
+            }
+
             Gizmos.color = Color.red;
-            Gizmos.DrawWireSphere(transform.position, explosionRadius);
+            Gizmos.DrawWireSphere(transform.position, radius);
         }
+
     }
 }

@@ -41,6 +41,8 @@ namespace Utils
 
     public interface IGameObjectPool : IDisposable
     {
+        /// <summary>按指定配置租借一个预制体实例。</summary>
+        /// <exception cref="InvalidOperationException">该预制体已有 Bucket 且请求配置与其不一致。</exception>
         GameObject Rent(
             GameObject prefab,
             PoolSettings settings,
@@ -49,6 +51,9 @@ namespace Utils
             Func<GameObject, GameObject> factory = null);
 
         bool Return(GameObject instance);
+
+        /// <summary>按指定配置预热一个预制体池。</summary>
+        /// <exception cref="InvalidOperationException">该预制体已有 Bucket 且请求配置与其不一致。</exception>
         void Prewarm(GameObject prefab, PoolSettings settings, int count, Func<GameObject, GameObject> factory = null);
         PoolUsage GetUsage(GameObject prefab);
         void Clear(GameObject prefab);
@@ -56,8 +61,9 @@ namespace Utils
     }
 
     /// <summary>
-    /// 战斗场景共用的 GameObject 池。
-    /// 每个预制体独立维护容量、已租出实例和可用实例；归还未知或重复归还的对象会被拒绝。
+    /// 由根容器持有、供各场景子容器共享的 GameObject 池。
+    /// 每个预制体独立维护容量、已租出实例和可用实例；同一 Bucket 的配置在显式清理前不可变。
+    /// 归还未知或重复归还的对象会被拒绝。
     /// </summary>
     public sealed class GameObjectPoolService : IGameObjectPool
     {
@@ -122,8 +128,10 @@ namespace Utils
 
             Bucket bucket = entry.Bucket;
             bucket.RentedCount--;
-            InvokeReturnCallbacks(entry);
+
+            // 先停用对象，再执行复用回调，避免回调期间把已归还对象当作活动对象观察到。
             instance.SetActive(false);
+            InvokeReturnCallbacks(entry);
             instance.transform.SetParent(null, false);
 
             if (bucket.Available.Count >= bucket.Settings.MaximumRetained)
@@ -143,8 +151,16 @@ namespace Utils
             int count,
             Func<GameObject, GameObject> factory = null)
         {
-            if (prefab == null || count <= 0)
+            if (prefab == null)
                 return;
+
+            if (count <= 0)
+            {
+                // 已有 Bucket 时仍校验配置,避免无效调用掩盖同一预制体的配置冲突。
+                if (_buckets.TryGetValue(prefab, out Bucket existingBucket))
+                    ValidateBucketConfiguration(prefab, existingBucket, settings, factory);
+                return;
+            }
 
             Bucket bucket = GetOrCreateBucket(prefab, settings, factory);
             int targetCount = Mathf.Min(count, bucket.Settings.MaximumRetained);
@@ -212,7 +228,10 @@ namespace Utils
             Func<GameObject, GameObject> factory)
         {
             if (_buckets.TryGetValue(prefab, out Bucket bucket))
+            {
+                ValidateBucketConfiguration(prefab, bucket, settings, factory);
                 return bucket;
+            }
 
             bucket = new Bucket
             {
@@ -226,6 +245,34 @@ namespace Utils
                 Prewarm(prefab, settings, settings.InitialCapacity, factory);
 
             return bucket;
+        }
+
+        private static void ValidateBucketConfiguration(
+            GameObject prefab,
+            Bucket bucket,
+            PoolSettings settings,
+            Func<GameObject, GameObject> factory)
+        {
+            bool settingsChanged =
+                bucket.Settings.InitialCapacity != settings.InitialCapacity ||
+                bucket.Settings.MaximumRetained != settings.MaximumRetained;
+            bool factoryChanged = !Equals(bucket.Factory, factory);
+            if (!settingsChanged && !factoryChanged)
+                return;
+
+            throw new InvalidOperationException(
+                $"预制体 '{prefab.name}' 的对象池配置在 Bucket 生命周期内不可变。" +
+                $"已有容量({bucket.Settings.InitialCapacity}, {bucket.Settings.MaximumRetained})," +
+                $"请求容量({settings.InitialCapacity}, {settings.MaximumRetained});" +
+                $"已有工厂:{DescribeFactory(bucket.Factory)},请求工厂:{DescribeFactory(factory)}。" +
+                "如需更换配置,请先 Clear(prefab)。");
+        }
+
+        private static string DescribeFactory(Func<GameObject, GameObject> factory)
+        {
+            return factory == null
+                ? "UnityEngine.Object.Instantiate"
+                : factory.Method.Name;
         }
 
         private Entry TakeAvailable(Bucket bucket)

@@ -39,13 +39,29 @@ public class GridVM
     /// <summary>物品能否放在锚点 (posX, posY):边界检查 + 逐格占用检查。</summary>
     public bool CanPlace(ItemVM item, int posX, int posY)
     {
-        if (item == null) return false;
-        if (!BoundaryCheck(posX, posY, item.Width, item.Height)) return false;
+        if (item == null)
+        {
+            return false;
+        }
+
+        if (!ItemPlacementPermissions.Allows(GridType, item.Definition))
+        {
+            return false;
+        }
+
+        if (!BoundaryCheck(posX, posY, item.Width, item.Height))
+        {
+            return false;
+        }
+
         foreach (var p in item.CoordinateSet)
         {
             int x = posX + p.x + item.RotationOffset.x;
             int y = posY + p.y + item.RotationOffset.y;
-            if (_cells[x, y] != null) return false;
+            if (_cells[x, y] != null)
+            {
+                return false;
+            }
         }
 
         return true;
@@ -54,7 +70,11 @@ public class GridVM
     /// <summary>放置物品(写占用 + 记录坐标)。失败(越界/占用)返回 false。</summary>
     public bool Place(ItemVM item, int posX, int posY)
     {
-        if (!CanPlace(item, posX, posY)) return false;
+        if (!CanPlace(item, posX, posY))
+        {
+            return false;
+        }
+
         item.LocalGridCoordinate = new Vector2Int(posX, posY);
         foreach (var p in item.CoordinateSet)
         {
@@ -70,12 +90,19 @@ public class GridVM
     /// <summary>从网格移除物品(清空它占用的所有格子)。</summary>
     public void Remove(ItemVM item)
     {
-        if (item == null) return;
+        if (item == null)
+        {
+            return;
+        }
+
         for (int x = 0; x < Width; x++)
         {
             for (int y = 0; y < Height; y++)
             {
-                if (_cells[x, y] == item) _cells[x, y] = null;
+                if (_cells[x, y] == item)
+                {
+                    _cells[x, y] = null;
+                }
             }
         }
 

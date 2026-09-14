@@ -88,7 +88,10 @@ namespace _Project.UI.Common
                 return;
             }
 
-            _hoverTooltip?.PositionNearScreen(screenPosition);
+            if (_hoverTooltip != null)
+            {
+                _hoverTooltip.PositionNearScreen(screenPosition);
+            }
         }
 
         /// <inheritdoc />
@@ -109,7 +112,7 @@ namespace _Project.UI.Common
             ItemView selected = _selection.SelectedItem;
             if (!_selectedEnabled || selected == null || selected.ItemVM?.Definition == null)
             {
-                _selectedTooltip?.Hide();
+                HideTooltip(_selectedTooltip);
                 return;
             }
 
@@ -143,7 +146,7 @@ namespace _Project.UI.Common
             _selectedEnabled = enabled;
             if (!enabled)
             {
-                _selectedTooltip?.Hide();
+                HideTooltip(_selectedTooltip);
                 return;
             }
 
@@ -154,8 +157,8 @@ namespace _Project.UI.Common
         public void Dispose()
         {
             _selection.SelectionChanged -= OnSelectionChanged;
-            _selectedTooltip?.Hide();
-            _hoverTooltip?.Hide();
+            HideTooltip(_selectedTooltip);
+            HideTooltip(_hoverTooltip);
             _selectedTooltip = null;
             _hoverTooltip = null;
             _hoverItem = null;
@@ -261,8 +264,16 @@ namespace _Project.UI.Common
 
         private void HideHoverInternal()
         {
-            _hoverTooltip?.Hide();
+            HideTooltip(_hoverTooltip);
             _hoverItem = null;
+        }
+
+        private static void HideTooltip(ItemTooltip tooltip)
+        {
+            if (tooltip != null)
+            {
+                tooltip.Hide();
+            }
         }
     }
 }

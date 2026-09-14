@@ -10,6 +10,7 @@ namespace _Project.UI.BackPack
         [SerializeField] private Button _returnButton;
         [SerializeField] private UIPanelShowHide _panelTween;
 
+        // CanvasGroup 必须由场景预置，运行时只读取引用，不补挂组件。
         private CanvasGroup _panelGroup;
 
         private void Start()
@@ -51,7 +52,7 @@ namespace _Project.UI.BackPack
         private CanvasGroup GetPanelGroup()
         {
             if (_panelGroup == null && _panelRoot != null)
-                _panelGroup = _panelRoot.GetComponent<CanvasGroup>() ?? _panelRoot.AddComponent<CanvasGroup>();
+                _panelGroup = _panelRoot.GetComponent<CanvasGroup>();
             return _panelGroup;
         }
     }

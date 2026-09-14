@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace FlockingSystem
 {
@@ -16,94 +18,111 @@ namespace FlockingSystem
     {
         [Header("Boids 参数")]
         [Tooltip("邻居检测半径（聚合+对齐范围）。")]
-        [SerializeField] private float neighbourDistance = 5f;
+        [FormerlySerializedAs("neighbourDistance")]
+        [SerializeField] private float _neighbourDistance = 5f;
 
         [Tooltip("分离触发距离（避免碰撞）。")]
-        [SerializeField] private float separationDistance = 2f;
+        [FormerlySerializedAs("separationDistance")]
+        [SerializeField] private float _separationDistance = 2f;
 
         [Tooltip("旋转平滑速度。")]
-        [SerializeField] private float rotationSpeed = 4f;
+        [FormerlySerializedAs("rotationSpeed")]
+        [SerializeField] private float _rotationSpeed = 4f;
 
         [Tooltip("最小游动速度。")]
-        [SerializeField] private float minSpeed = 2f;
+        [FormerlySerializedAs("minSpeed")]
+        [SerializeField] private float _minSpeed = 2f;
 
         [Tooltip("最大游动速度。")]
-        [SerializeField] private float maxSpeed = 5f;
+        [FormerlySerializedAs("maxSpeed")]
+        [SerializeField] private float _maxSpeed = 5f;
 
         [Header("性能")]
         [Tooltip("ECS 接管后此值不再生效。")]
-        [SerializeField, Range(0f, 1f)] private float ruleApplyChance = 0.2f;
+        [FormerlySerializedAs("ruleApplyChance")]
+        [SerializeField, Range(0f, 1f)] private float _boidsRuleApplicationChance = 0.2f;
 
         #region Public Accessors
 
         /// <summary>邻居检测半径。</summary>
         public float NeighbourDistance
         {
-            get => neighbourDistance;
-            set => neighbourDistance = value;
+            get => _neighbourDistance;
+            set => _neighbourDistance = value;
         }
 
         /// <summary>分离触发距离。</summary>
         public float SeparationDistance
         {
-            get => separationDistance;
-            set => separationDistance = value;
+            get => _separationDistance;
+            set => _separationDistance = value;
         }
 
         /// <summary>旋转平滑速度。</summary>
         public float RotationSpeed
         {
-            get => rotationSpeed;
-            set => rotationSpeed = value;
+            get => _rotationSpeed;
+            set => _rotationSpeed = value;
         }
 
         /// <summary>最小游动速度。</summary>
         public float MinSpeed
         {
-            get => minSpeed;
-            set => minSpeed = value;
+            get => _minSpeed;
+            set => _minSpeed = value;
         }
 
         /// <summary>最大游动速度。</summary>
         public float MaxSpeed
         {
-            get => maxSpeed;
-            set => maxSpeed = value;
+            get => _maxSpeed;
+            set => _maxSpeed = value;
         }
 
-        /// <summary>当前速度。</summary>
-        public float Speed { get; private set; }
+        /// <summary>当前群游速度。</summary>
+        public float CurrentSpeed { get; private set; }
 
         /// <summary>
         /// 外部速度倍率（如冰冻效果减速）。
-        /// 由外部系统（EnemyBase/状态效果）在 Update 中设置。
+        /// 由外部系统或状态效果在 Update 中设置。
         /// </summary>
         public float SpeedMultiplier { get; set; } = 1f;
 
         /// <summary>关联的群游管理器。</summary>
-        public FlockManager Manager { get; private set; }
+        public FlockManager FlockManager { get; private set; }
 
         #endregion
 
         #region Unity Lifecycle
 
-        private Transform cachedTransform;
+        private Transform _cachedTransform;
 
-        void Awake()
+        /// <summary>
+        /// 缓存 Transform，并为代理生成初始速度。
+        /// </summary>
+        private void Awake()
         {
-            cachedTransform = transform;
-            Speed = Random.Range(minSpeed, maxSpeed);
+            _cachedTransform = transform;
+            CurrentSpeed = Random.Range(_minSpeed, _maxSpeed);
         }
 
-        void Update()
+        /// <summary>
+        /// 使用 Unity 帧时间推进一帧群游移动。
+        /// </summary>
+        private void Update()
         {
-            ApplyMovementInternal();
+            SimulateMovement();
         }
 
-        void OnDestroy()
+        /// <summary>
+        /// 销毁代理时从所属群组注销。
+        /// </summary>
+        private void OnDestroy()
         {
-            if (Manager != null)
-                Manager.Unregister(this);
+            if (FlockManager != null)
+            {
+                FlockManager.UnregisterAgent(this);
+            }
         }
 
         #endregion
@@ -115,45 +134,52 @@ namespace FlockingSystem
         /// </summary>
         public void Initialize(FlockManager manager)
         {
-            Manager = manager;
-            Speed = Random.Range(minSpeed, maxSpeed);
-            manager.Register(this);
+            FlockManager = manager;
+            CurrentSpeed = Random.Range(_minSpeed, _maxSpeed);
+            manager.RegisterAgent(this);
         }
 
         /// <summary>
         /// 外部调用：执行一帧群游移动。
-        /// EnemyBase 等系统可用此方法替代 Update 自主移动。
+        /// 外部系统可用此方法替代 Update 自主移动。
         /// </summary>
         public void ApplyMovement(float deltaTime)
         {
-            ApplyMovementInternal(deltaTime);
+            SimulateMovement(deltaTime);
         }
 
         #endregion
 
         #region Movement Logic
 
-        private void ApplyMovementInternal(float? overrideDeltaTime = null)
+        /// <summary>
+        /// 根据群组边界、Boids 规则和速度倍率推进代理位置。
+        /// </summary>
+        /// <param name="overrideDeltaTime">可选的模拟时间；为空时使用 Unity 帧时间。</param>
+        private void SimulateMovement(float? overrideDeltaTime = null)
         {
-            float dt = overrideDeltaTime ?? Time.deltaTime;
+            float deltaTime = overrideDeltaTime ?? Time.deltaTime;
 
-            if (Manager == null) return;
+            if (FlockManager == null)
+            {
+                return;
+            }
 
-            bool outsideBounds = !Manager.SwimBounds.Contains(cachedTransform.position);
+            bool outsideBounds = !FlockManager.SwimBounds.Contains(_cachedTransform.position);
 
             if (outsideBounds)
             {
-                SteerToward(Manager.SwimCenter);
+                SteerToward(FlockManager.SwimCenter);
             }
-            else if (Random.value < ruleApplyChance)
+            else if (Random.value < _boidsRuleApplicationChance)
             {
-                ApplyBoidsRules();
+                ApplyBoidsSteering();
             }
 
             // 钳制速度并向前移动
-            Speed = Mathf.Clamp(Speed, minSpeed, maxSpeed);
-            float effectiveSpeed = Speed * SpeedMultiplier;
-            cachedTransform.Translate(Vector3.forward * (effectiveSpeed * dt));
+            CurrentSpeed = Mathf.Clamp(CurrentSpeed, _minSpeed, _maxSpeed);
+            float effectiveSpeed = CurrentSpeed * SpeedMultiplier;
+            _cachedTransform.Translate(Vector3.forward * (effectiveSpeed * deltaTime));
         }
 
         /// <summary>
@@ -161,67 +187,80 @@ namespace FlockingSystem
         /// </summary>
         private void SteerToward(Vector3 target)
         {
-            Vector3 direction = target - cachedTransform.position;
-            cachedTransform.rotation = Quaternion.Slerp(
-                cachedTransform.rotation,
+            Vector3 direction = target - _cachedTransform.position;
+            _cachedTransform.rotation = Quaternion.Slerp(
+                _cachedTransform.rotation,
                 Quaternion.LookRotation(direction),
-                rotationSpeed * 2f * Time.deltaTime);
+                _rotationSpeed * 2f * Time.deltaTime);
         }
 
         /// <summary>
         /// Boids 三规则：聚合 + 分离 + 对齐。
         /// O(n²) 遍历所有同群代理。
         /// </summary>
-        private void ApplyBoidsRules()
+        private void ApplyBoidsSteering()
         {
-            if (Manager == null || Manager.Agents == null) return;
+            if (FlockManager == null || FlockManager.RegisteredAgents == null)
+            {
+                return;
+            }
 
-            var agents = Manager.Agents;
+            List<FlockAgent> registeredAgents = FlockManager.RegisteredAgents;
             Vector3 cohesion = Vector3.zero;
             Vector3 avoidance = Vector3.zero;
             float totalSpeed = 0f;
             int groupSize = 0;
-            Vector3 myPos = cachedTransform.position;
+            Vector3 agentPosition = _cachedTransform.position;
 
-            foreach (var other in agents)
+            foreach (FlockAgent otherAgent in registeredAgents)
             {
-                if (other == this || other == null) continue;
+                if (otherAgent == this || otherAgent == null)
+                {
+                    continue;
+                }
 
-                Vector3 otherPos = other.transform.position;
-                float dist = Vector3.Distance(otherPos, myPos);
-                if (dist > neighbourDistance) continue;
+                Vector3 otherAgentPosition = otherAgent.transform.position;
+                float distance = Vector3.Distance(otherAgentPosition, agentPosition);
+                if (distance > _neighbourDistance)
+                {
+                    continue;
+                }
 
                 // 聚合
-                cohesion += otherPos;
+                cohesion += otherAgentPosition;
                 groupSize++;
-                totalSpeed += other.Speed;
+                totalSpeed += otherAgent.CurrentSpeed;
 
                 // 分离
-                if (dist < separationDistance && dist > 0.001f)
+                if (distance < _separationDistance && distance > 0.001f)
                 {
-                    avoidance += (myPos - otherPos).normalized;
+                    avoidance += (agentPosition - otherAgentPosition).normalized;
                 }
             }
 
-            if (groupSize == 0) return;
+            if (groupSize == 0)
+            {
+                return;
+            }
 
             // 聚合方向
-            Vector3 avgCenter = cohesion / groupSize;
-            Vector3 cohesionDir = (avgCenter + Manager.GoalPos) * 0.5f - myPos;
+            Vector3 averageNeighbourPosition = cohesion / groupSize;
+            Vector3 cohesionDirection = (averageNeighbourPosition + FlockManager.GoalPosition)
+                * 0.5f - agentPosition;
 
             // 对齐：平滑匹配邻居平均速度
             float avgSpeed = totalSpeed / groupSize;
-            Speed = Mathf.Lerp(Speed, avgSpeed, Time.deltaTime * 3f);
+            CurrentSpeed = Mathf.Lerp(CurrentSpeed, avgSpeed, Time.deltaTime * 3f);
 
             // 最终方向 = 聚合 + 分离(加权)
-            Vector3 finalDirection = cohesionDir + avoidance * separationDistance;
+            Vector3 finalDirection = cohesionDirection + avoidance * _separationDistance;
 
             if (finalDirection != Vector3.zero)
             {
-                cachedTransform.rotation = Quaternion.Slerp(
-                    cachedTransform.rotation,
+                _cachedTransform.rotation = Quaternion.Slerp(
+                    _cachedTransform.rotation,
                     Quaternion.LookRotation(finalDirection),
-                    rotationSpeed * Time.deltaTime);
+                    _rotationSpeed * Time.deltaTime);
             }
         }
 

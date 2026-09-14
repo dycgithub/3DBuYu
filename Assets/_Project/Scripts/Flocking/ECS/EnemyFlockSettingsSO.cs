@@ -99,7 +99,13 @@ namespace FlockingSystem.ECS
         public int MaximumNeighbourCandidates => Mathf.Clamp(
             maximumNeighbourCandidates, 1, EnemyFlockLimits.MaximumNeighbourCandidates);
 
-        public EnemyFlockProfile GetProfile(EnemyType enemyType, float speedMultiplier)
+        /// <summary>
+        /// 根据敌人类型读取配置，并将当前速度倍率写入运行时群游配置。
+        /// </summary>
+        /// <param name="enemyType">要读取的敌人类型。</param>
+        /// <param name="speedMultiplier">敌人当前的速度倍率。</param>
+        /// <returns>可供 ECS 实体使用的群游配置。</returns>
+        public EnemyFlockProfile GetProfileForEnemyType(EnemyType enemyType, float speedMultiplier)
         {
             ProfileSettings profile = enemyType switch
             {
@@ -108,7 +114,7 @@ namespace FlockingSystem.ECS
                 _ => normal,
             };
 
-            return profile.ToRuntime(speedMultiplier);
+            return profile.CreateRuntimeProfile(speedMultiplier);
         }
 
         [Serializable]
@@ -121,7 +127,12 @@ namespace FlockingSystem.ECS
             [SerializeField, Min(0f)] public float MinSpeed = 1f;
             [SerializeField, Min(0f)] public float MaxSpeed = 3f;
 
-            public EnemyFlockProfile ToRuntime(float speedMultiplier)
+            /// <summary>
+            /// 将 Inspector 配置转换为不可变的运行时群游配置。
+            /// </summary>
+            /// <param name="speedMultiplier">运行时速度倍率。</param>
+            /// <returns>归一化前的群游运行时配置。</returns>
+            public EnemyFlockProfile CreateRuntimeProfile(float speedMultiplier)
             {
                 return new EnemyFlockProfile(
                     VisualIndex,

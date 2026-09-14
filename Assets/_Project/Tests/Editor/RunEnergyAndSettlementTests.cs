@@ -1,3 +1,5 @@
+using System;
+using System.Reflection;
 using GameSystem;
 using NUnit.Framework;
 using Services;
@@ -19,27 +21,25 @@ public class RunEnergyAndSettlementTests
     }
 
     [Test]
-    public void Tick_UsesTheCurrentOvertimeCostMultiplier()
+    public void Tick_UsesTheBaseEnergyDrainRate()
     {
         _energy.Initialize(100f, 100f);
-        _energy.SetCostMultiplier(2f);
 
         float drained = _energy.Tick(1f, 3f);
 
-        Assert.That(drained, Is.EqualTo(6f));
-        Assert.That(_energy.CurrentEnergy.CurrentValue, Is.EqualTo(94f));
+        Assert.That(drained, Is.EqualTo(3f));
+        Assert.That(_energy.CurrentEnergy.CurrentValue, Is.EqualTo(97f));
     }
 
     [Test]
-    public void AddEnergy_DoesNotApplyTheCostMultiplier()
+    public void AddEnergy_ReturnsOnlyTheAmountThatFitsWithinTheCap()
     {
         _energy.Initialize(5f, 10f);
-        _energy.SetCostMultiplier(3f);
 
-        float gained = _energy.AddEnergy(1f);
+        float gained = _energy.AddEnergy(20f);
 
-        Assert.That(gained, Is.EqualTo(1f));
-        Assert.That(_energy.CurrentEnergy.CurrentValue, Is.EqualTo(6f));
+        Assert.That(gained, Is.EqualTo(5f));
+        Assert.That(_energy.CurrentEnergy.CurrentValue, Is.EqualTo(10f));
     }
 
     [Test]
@@ -55,6 +55,17 @@ public class RunEnergyAndSettlementTests
         _energy.Drain(1f, EnergySpendKind.Skill);
 
         Assert.That(eventCount, Is.EqualTo(2));
+    }
+
+    [TestCase(EnergySpendKind.EquipmentUpkeep)]
+    [TestCase(EnergySpendKind.MenuFusion)]
+    public void EveryEnergySpendKind_UsesTheRequestedBaseAmount(EnergySpendKind kind)
+    {
+        _energy.Initialize(100f, 100f);
+
+        float drained = _energy.Drain(3f, kind);
+
+        Assert.That(drained, Is.EqualTo(3f));
     }
 
     [TestCase(299.99f, 300f, 10, 10, false)]
@@ -78,15 +89,44 @@ public class RunEnergyAndSettlementTests
     }
 
     [Test]
-    public void CalculateScaledPoints_UsesFloorAfterApplyingMultiplier()
+    public void CalculateSettlementReward_UsesTheDifficultyMultiplier()
     {
-        Assert.That(RunRuleMath.CalculateScaledPoints(25, 2.4f), Is.EqualTo(60));
-        Assert.That(RunRuleMath.CalculateScaledPoints(25, 1.99f), Is.EqualTo(49));
+        Assert.That(CalculateSettlementReward(100, 1.5f), Is.EqualTo(150));
     }
 
     [Test]
-    public void CalculateSettlementReward_UsesTheDifficultyMultiplier()
+    public void CalculateSettlementReward_InvalidMultipliersReturnZero()
     {
-        Assert.That(RunRuleMath.CalculateSettlementReward(101, 1.5f), Is.EqualTo(151));
+        Assert.That(CalculateSettlementReward(100, 0f), Is.Zero);
+        Assert.That(CalculateSettlementReward(100, -1f), Is.Zero);
+        Assert.That(CalculateSettlementReward(100, float.NaN), Is.Zero);
+        Assert.That(CalculateSettlementReward(100, float.PositiveInfinity), Is.Zero);
+    }
+
+    [Test]
+    public void CalculateSettlementReward_ClampsAtIntMaximum()
+    {
+        Assert.That(
+            CalculateSettlementReward(int.MaxValue, 20f),
+            Is.EqualTo(int.MaxValue));
+    }
+
+    private static int CalculateSettlementReward(
+        int sessionPoints,
+        float settlementMultiplier)
+    {
+        MethodInfo method = typeof(RunRuleMath).GetMethod(
+            "CalculateSettlementReward",
+            BindingFlags.Static | BindingFlags.Public,
+            null,
+            new[] { typeof(int), typeof(float) },
+            null);
+
+        Assert.That(method, Is.Not.Null);
+        return method == null
+            ? 0
+            : (int)method.Invoke(
+                null,
+                new object[] { sessionPoints, settlementMultiplier });
     }
 }

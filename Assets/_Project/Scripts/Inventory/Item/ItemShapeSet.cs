@@ -41,6 +41,8 @@ public class ItemShapeSet : ScriptableObject
             new PointSet { Shape = ItemShape.LShape3,      Points = GridUtilities.ShapeFactory.LShape3() },
             new PointSet { Shape = ItemShape.TShape1,      Points = GridUtilities.ShapeFactory.TShape1() },
             new PointSet { Shape = ItemShape.TShape2,      Points = GridUtilities.ShapeFactory.TShape2() },
+            new PointSet { Shape = ItemShape.Plus3,        Points = GridUtilities.ShapeFactory.Plus3() },
+            new PointSet { Shape = ItemShape.Plus5,        Points = GridUtilities.ShapeFactory.Plus5() },
         };
     }
 

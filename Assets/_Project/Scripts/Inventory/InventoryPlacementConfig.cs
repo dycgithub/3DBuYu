@@ -10,13 +10,26 @@ public class InventoryPlacementConfig : ScriptableObject
     public Color ValidColor => validColor;
     public Color InvalidColor => invalidColor;
     
+    private static InventoryPlacementConfig _default;
+
     /// <summary>全局默认配置(未指定资产时使用)。</summary>
-    public static InventoryPlacementConfig Default { get; private set; }
+    public static InventoryPlacementConfig Default
+    {
+        get
+        {
+            if (_default == null)
+            {
+                _default = CreateInstance<InventoryPlacementConfig>();
+            }
+
+            return _default;
+        }
+    }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     private static void InitDefault()
     {
-        Default = CreateInstance<InventoryPlacementConfig>();
+        _default = CreateInstance<InventoryPlacementConfig>();
     }
 
     /// <summary>
@@ -28,6 +41,12 @@ public class InventoryPlacementConfig : ScriptableObject
         if (grid == null || item == null)
         {
             reason = PlacementBlockReason.None;
+            return false;
+        }
+
+        if (!ItemPlacementPermissions.Allows(grid.GridType, item.Definition))
+        {
+            reason = PlacementBlockReason.WrongGridType;
             return false;
         }
 

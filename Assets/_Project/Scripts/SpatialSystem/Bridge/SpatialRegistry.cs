@@ -78,15 +78,32 @@ namespace SpatialSystem.Bridge
 
         private void Awake()
         {
+            EnsureInitialized();
+        }
+
+        private void EnsureInitialized()
+        {
+            if (grid.Buckets.IsCreated &&
+                grid.Entries.IsCreated &&
+                queryBuffer.IsCreated &&
+                entityIdToEntryIndex != null &&
+                entityLookup != null &&
+                managedResultCache != null &&
+                expiredEntityIds != null)
+            {
+                return;
+            }
+
             InitializeGrid();
         }
 
         private void InitializeGrid()
         {
+            grid.Dispose();
             if (queryBuffer.IsCreated)
                 queryBuffer.Dispose();
 
-            grid.Initialize(
+            grid.InitializeCentered(
                 cellSize,
                 new float3(gridCenter.x, gridCenter.y, gridCenter.z),
                 gridDimensions.x,
@@ -140,6 +157,8 @@ namespace SpatialSystem.Bridge
                 Debug.LogWarning("[SpatialRegistry] Attempted to register null entity.");
                 return -1;
             }
+
+            EnsureInitialized();
 
             if (grid.ActiveEntryCount >= maxEntries)
                 CompactIfNeeded();
@@ -223,6 +242,7 @@ namespace SpatialSystem.Bridge
         /// </summary>
         public List<IDamageable> QueryRadiusManaged(Vector3 center, float radius, int layerMask)
         {
+            EnsureInitialized();
             managedResultCache.Clear();
 
             float3 f3Center = new float3(center.x, center.y, center.z);
@@ -254,6 +274,7 @@ namespace SpatialSystem.Bridge
         /// </summary>
         public List<IDamageable> QueryAllManaged(int layerMask)
         {
+            EnsureInitialized();
             managedResultCache.Clear();
 
             foreach (var pair in entityIdToEntryIndex)
@@ -280,6 +301,7 @@ namespace SpatialSystem.Bridge
         /// </summary>
         public IDamageable QueryNearestManaged(Vector3 center, float radius, int layerMask)
         {
+            EnsureInitialized();
             float3 f3Center = new float3(center.x, center.y, center.z);
 
             if (SpatialQuery.QueryNearestBurst(
@@ -306,6 +328,7 @@ namespace SpatialSystem.Bridge
         public List<IDamageable> QueryFilteredManaged(Vector3 center, float radius, int layerMask,
             SpatialQuery.FilterDelegate filter)
         {
+            EnsureInitialized();
             managedResultCache.Clear();
 
             var managedBuffer = new SpatialQueryResult[queryBufferSize];
@@ -330,6 +353,7 @@ namespace SpatialSystem.Bridge
         /// </summary>
         public SpatialQueryResult[] QueryRaw(Vector3 center, float radius, int layerMask, out int resultCount)
         {
+            EnsureInitialized();
             float3 f3Center = new float3(center.x, center.y, center.z);
 
             resultCount = SpatialQuery.QueryRadiusBurst(
@@ -487,11 +511,11 @@ namespace SpatialSystem.Bridge
                 return;
             }
 
-            Vector3 origin = gridCenter;
             Vector3 size = new Vector3(
                 gridDimensions.x * cellSize,
                 gridDimensions.y * cellSize,
                 gridDimensions.z * cellSize);
+            Vector3 origin = gridCenter - size * 0.5f;
             Vector3 max = origin + size;
             Vector3 center = (origin + max) * 0.5f;
 

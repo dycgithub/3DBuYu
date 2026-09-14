@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace GameSystem
@@ -37,5 +38,12 @@ namespace GameSystem
         [Header("默认难度")]
         [Tooltip("未由关卡选择界面覆盖时使用的难度配置。")]
         public DifficultyConfig defaultDifficulty;
+
+        [Header("可用难度")]
+        [Tooltip("本局可切换的难度配置；数组顺序不影响难度高低。")]
+        [SerializeField] private DifficultyConfig[] availableDifficulties;
+
+        /// <summary>获取本局可用的难度配置列表。</summary>
+        public IReadOnlyList<DifficultyConfig> AvailableDifficulties => availableDifficulties;
     }
 }

@@ -7,34 +7,50 @@ namespace EnemySystem.Components
 {
     /// <summary>
     /// 敌人死亡奖励组件。
-    /// 奖励值属于敌人 prefab 的配置；能量直接回到本局能量池，积分交给 GameManager 计入本局账并应用超时倍率。
+    /// <para>奖励数值由所属 <see cref="EnemyAttributesSO"/> 提供；本组件只负责一次性提交能量和积分。</para>
     /// </summary>
+    [DisallowMultipleComponent]
     [RequireComponent(typeof(Enemy))]
-    public sealed class EnemyDeathRewardComponent : MonoBehaviour
+    public sealed class EnemyDeathRewardComponent : MonoBehaviour, IEnemyActivationListener
     {
-        [Header("死亡奖励")]
-        [Tooltip("敌人死亡时回复的能量，不受超时倍率影响。")]
-        [SerializeField, Min(0f)] private float energyReward;
-
-        [Tooltip("敌人死亡时提供的基础 points，由 GameManager 按超时倍率计入本局。")]
-        [SerializeField, Min(0)] private int pointsReward;
-
         [Inject] private IEnergyService _energy;
         [Inject] private IGameEventService _gameEventService;
+        [Inject] private IPointsFlyEffectService _pointsFlyEffect;
         [Inject] private ICombatPhaseService _combatPhase;
 
         private Enemy _enemy;
         private bool _subscribed;
         private bool _rewarded;
 
-        public float EnergyReward => Mathf.Max(0f, energyReward);
-        public int PointsReward => Mathf.Max(0, pointsReward);
+        /// <summary>获取当前敌人配置中的能量奖励。</summary>
+        public float EnergyReward
+        {
+            get
+            {
+                return _enemy != null && _enemy.Attributes != null
+                    ? Mathf.Max(0f, _enemy.Attributes.energyReward)
+                    : 0f;
+            }
+        }
 
+        /// <summary>获取当前敌人配置中的基础积分奖励。</summary>
+        public int PointsReward
+        {
+            get
+            {
+                return _enemy != null && _enemy.Attributes != null
+                    ? Mathf.Max(0, _enemy.Attributes.pointsReward)
+                    : 0;
+            }
+        }
+
+        /// <summary>缓存所属敌人。</summary>
         private void Awake()
         {
             _enemy = GetComponent<Enemy>();
         }
 
+        /// <summary>重置奖励状态并注册死亡事件。</summary>
         private void OnEnable()
         {
             _rewarded = false;
@@ -43,30 +59,71 @@ namespace EnemySystem.Components
             if (_enemy != null && !_subscribed)
             {
                 _enemy.OnDied += HandleDeath;
+                _enemy.ReuseRequested += HandleReuseRequested;
                 _subscribed = true;
             }
         }
 
+        /// <summary>注销死亡事件，避免对象池实例重复提交奖励。</summary>
         private void OnDisable()
         {
             if (_enemy != null && _subscribed)
             {
                 _enemy.OnDied -= HandleDeath;
+                _enemy.ReuseRequested -= HandleReuseRequested;
                 _subscribed = false;
             }
         }
 
+        /// <summary>在战斗阶段允许时提交一次敌人死亡奖励。</summary>
+        /// <param name="enemy">触发死亡事件的敌人。</param>
         private void HandleDeath(Enemy enemy)
         {
-            if (_rewarded)
+            if (_rewarded ||
+                enemy == null ||
+                enemy.DeathCause == EnemyDeathCause.Consumed ||
+                enemy.Attributes == null ||
+                enemy.Attributes.rewardMode == EnemyRewardMode.Ignore)
+            {
                 return;
+            }
 
             _rewarded = true;
             if (_combatPhase != null && !_combatPhase.CanPerformCombatActions)
+            {
                 return;
+            }
 
             _energy?.AddEnergy(EnergyReward);
-            _gameEventService?.NotifyEnemyKilled(PointsReward);
+            int awardedPoints = _gameEventService != null
+                ? _gameEventService.NotifyEnemyKilled(PointsReward)
+                : 0;
+            _pointsFlyEffect?.Publish(awardedPoints, enemy != null
+                ? enemy.transform.position
+                : transform.position);
+        }
+
+        /// <summary>实体主动重置时允许下一次死亡再次提交奖励。</summary>
+        private void HandleReuseRequested()
+        {
+            _rewarded = false;
+        }
+
+        /// <summary>响应宿主广播，补做死亡事件订阅。</summary>
+        void IEnemyActivationListener.OnEnemyActivationReady()
+        {
+            if (!isActiveAndEnabled)
+            {
+                return;
+            }
+
+            _enemy ??= GetComponent<Enemy>();
+            if (_enemy != null && !_subscribed)
+            {
+                _enemy.OnDied += HandleDeath;
+                _enemy.ReuseRequested += HandleReuseRequested;
+                _subscribed = true;
+            }
         }
     }
 }
