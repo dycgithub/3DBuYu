@@ -6,7 +6,7 @@ namespace CameraSystem
 {
     /// <summary>
     /// 驱动球面战斗的跟随摄像机。
-    /// <para>在外层球面上平滑追赶玩家，画面上方随法线连续运输，跨极点时保持朝向连续。</para>
+    /// <para>本类只负责球面位置和姿态计算，可调参数由 SphericalCameraDirector 统一注入。</para>
     /// </summary>
     [DefaultExecutionOrder(-40)]
     [RequireComponent(typeof(CinemachineVirtualCamera))]
@@ -14,22 +14,8 @@ namespace CameraSystem
     {
         private const float MinimumDirectionSqrMagnitude = 0.000001f;
         private const float MinimumMovementSqrMagnitude = 0.000001f;
-        private const float MinimumFieldOfView = 1f;
-        private const float MaximumFieldOfView = 179f;
-        private const float DefaultFieldOfView = 61f;
 
-        [Header("跟随对象")]
-        [SerializeField] private SphereWalker _walker;
-
-        [Header("球面跟随")]
-        [SerializeField, Min(0f)] private float _cameraDistanceOffset = 12.5f;
-        [SerializeField, Min(0.001f)] private float _followDelaySeconds = 0.2f;
-        [SerializeField, Min(0.001f)] private float _returnDelaySeconds = 0.1f;
-
-        [Header("构图")]
-        [SerializeField, Min(MinimumFieldOfView)] private float _baseFieldOfView = DefaultFieldOfView;
-        [SerializeField] private float _lookAtVerticalOffset;
-
+        private SphereWalker _walker;
         private CinemachineVirtualCamera _camera;
         private Vector3 _currentDirection;
         private Vector3 _poseDirection;
@@ -53,9 +39,7 @@ namespace CameraSystem
         /// <summary>初始化摄像机和球面跟随对象。</summary>
         public void Initialize(SphereWalker walker)
         {
-            if (walker != null)
-                _walker = walker;
-
+            _walker = walker;
             _camera = GetComponent<CinemachineVirtualCamera>();
             if (_camera == null)
                 return;
@@ -64,7 +48,6 @@ namespace CameraSystem
             _camera.Follow = null;
             _camera.LookAt = null;
             EnsureImpulseListener();
-            _camera.m_Lens.FieldOfView = NormalizeFieldOfView(_baseFieldOfView);
             _initialized = _walker != null;
             if (_initialized)
             {
@@ -93,8 +76,19 @@ namespace CameraSystem
             }
         }
 
-        /// <summary>由 Director 在 LateUpdate 中推进跟随姿态。</summary>
+        /// <summary>使用空配置推进跟随姿态，保留独立调用时的几何更新能力。</summary>
         public void Tick(float deltaTime)
+        {
+            Tick(deltaTime, 0f, 0f, 0f, 0f);
+        }
+
+        /// <summary>由 Director 在 LateUpdate 中推进跟随姿态。</summary>
+        public void Tick(
+            float deltaTime,
+            float cameraDistanceOffset,
+            float followDelaySeconds,
+            float returnDelaySeconds,
+            float lookAtVerticalOffset)
         {
             if (!_active || !_initialized || _walker == null || _camera == null)
                 return;
@@ -109,18 +103,18 @@ namespace CameraSystem
             Vector3 targetDirection = offset.normalized;
             bool playerMoved = (_walker.transform.position - _lastPlayerPosition).sqrMagnitude >
                 MinimumMovementSqrMagnitude;
-            float timeConstant = playerMoved ? _followDelaySeconds : _returnDelaySeconds;
+            float timeConstant = playerMoved ? followDelaySeconds : returnDelaySeconds;
             RetargetDirection(targetDirection, timeConstant);
             _lastPlayerPosition = _walker.transform.position;
 
-            float radius = Mathf.Max(0.01f, _walker.radius) + _cameraDistanceOffset;
+            float radius = Mathf.Max(0.01f, _walker.radius) + Mathf.Max(0f, cameraDistanceOffset);
             transform.position = CalculateCameraPosition(center, _currentDirection, radius);
 
             // 保留沿路径积累的朝向，避免在极点附近重新指北造成画面翻转。
             Quaternion transport = Quaternion.FromToRotation(_poseDirection, _currentDirection);
             _tangentUp = Vector3.ProjectOnPlane(transport * _tangentUp, _currentDirection).normalized;
             _poseDirection = _currentDirection;
-            Vector3 lookTarget = _walker.transform.position + _tangentUp * _lookAtVerticalOffset;
+            Vector3 lookTarget = _walker.transform.position + _tangentUp * lookAtVerticalOffset;
             Vector3 lookDirection = lookTarget - transform.position;
             if (lookDirection.sqrMagnitude > MinimumDirectionSqrMagnitude)
             {
@@ -128,22 +122,14 @@ namespace CameraSystem
             }
         }
 
-        /// <summary>设置 Follow 摄像机的基础 FOV。</summary>
-        public void SetBaseFieldOfView(float fieldOfView)
-        {
-            _baseFieldOfView = NormalizeFieldOfView(fieldOfView);
-            if (_camera != null)
-                _camera.m_Lens.FieldOfView = _baseFieldOfView;
-        }
-
         /// <summary>设置当前 Follow 摄像机的运行时 FOV。</summary>
         public void SetFieldOfView(float fieldOfView)
         {
-            if (_camera == null)
+            if (_camera == null || !IsFinite(fieldOfView))
                 return;
 
             LensSettings lens = _camera.m_Lens;
-            lens.FieldOfView = NormalizeFieldOfView(fieldOfView);
+            lens.FieldOfView = fieldOfView;
             _camera.m_Lens = lens;
         }
 
@@ -253,31 +239,6 @@ namespace CameraSystem
         {
             _directionTween?.Kill();
             _directionTween = null;
-        }
-
-        private void OnValidate()
-        {
-            _cameraDistanceOffset = NormalizeNonNegative(_cameraDistanceOffset);
-            _followDelaySeconds = NormalizePositive(_followDelaySeconds);
-            _returnDelaySeconds = NormalizePositive(_returnDelaySeconds);
-            _baseFieldOfView = NormalizeFieldOfView(_baseFieldOfView);
-        }
-
-        private static float NormalizePositive(float value)
-        {
-            return IsFinite(value) ? Mathf.Max(0.001f, value) : 0.2f;
-        }
-
-        private static float NormalizeFieldOfView(float value)
-        {
-            return IsFinite(value)
-                ? Mathf.Clamp(value, MinimumFieldOfView, MaximumFieldOfView)
-                : DefaultFieldOfView;
-        }
-
-        private static float NormalizeNonNegative(float value)
-        {
-            return IsFinite(value) ? Mathf.Max(0f, value) : 0f;
         }
 
         private static bool IsFinite(float value)

@@ -11,28 +11,45 @@ namespace Play
     /// 敌人不需要知道玩家控制器或能量服务的具体实现。
     /// </summary>
     [DisallowMultipleComponent]
-    [RequireComponent(typeof(BuffController))]
-    public sealed class PlayerCombatTarget : MonoBehaviour, IPlayerCombatTarget, IDamageRequestReceiver
+    public sealed class PlayerCombatTarget : MonoBehaviour, IPlayerCombatTarget, IBuffTarget, IDamageRequestReceiver
     {
         [Inject] private IEnergyService _energy;
+        [Inject] private IBuffService _buffService;
 
-        private BuffController _buffController;
+        // 仅供未经过容器的编辑器测试使用；正式运行时由 GameLoop 注入场景级服务。
+        private static readonly BuffManner EditorFallbackBuffManner = new();
 
         /// <summary>玩家当前是否仍可作为战斗目标。</summary>
         public bool IsAlive => gameObject.activeInHierarchy &&
             (_energy == null || !_energy.IsDepleted);
 
-        /// <summary>缓存玩家 Buff 控制器。</summary>
-        private void Awake()
+        /// <summary>启用时向场景级 BuffManner 登记玩家目标。</summary>
+        private void OnEnable()
         {
-            _buffController = GetComponent<BuffController>();
+            RegisterBuffTarget();
+        }
+
+        /// <summary>注入完成后再次登记，覆盖容器晚于 OnEnable 注入的场景。</summary>
+        private void Start()
+        {
+            RegisterBuffTarget();
+        }
+
+        /// <summary>禁用时从场景级 BuffManner 注销玩家目标。</summary>
+        private void OnDisable()
+        {
+            GetBuffService()?.UnregisterTarget(this);
         }
 
         /// <summary>返回玩家当前移动速度倍率。</summary>
         public float GetMovementSpeedMultiplier()
         {
-            return _buffController != null
-                ? _buffController.GetModifierMultiplier(BuffModifierType.MovementSpeedMultiplier)
+            RegisterBuffTarget();
+            IBuffService buffService = GetBuffService();
+            return buffService != null
+                ? buffService.GetModifierMultiplier(
+                    this,
+                    BuffModifierType.MovementSpeedMultiplier)
                 : 1f;
         }
 
@@ -92,7 +109,59 @@ namespace Play
         /// <summary>以指定来源给玩家施加 Buff。</summary>
         public void ApplyBuff(BuffDefinitionSO definition, int sourceInstanceId)
         {
-            _buffController?.ApplyBuff(definition, sourceInstanceId);
+            if (definition == null)
+            {
+                return;
+            }
+
+            RegisterBuffTarget();
+            GetBuffService()?.ApplyBuff(this, definition, sourceInstanceId);
+        }
+
+        /// <summary>
+        /// 仅在玩家没有同类活动 Buff 时施加一个 Buff。
+        /// </summary>
+        /// <param name="definition">要施加的 Buff 静态定义。</param>
+        /// <param name="sourceInstanceId">Buff 来源实例标识。</param>
+        /// <returns>本次实际新增 Buff 时返回 true。</returns>
+        public bool TryApplyBuffIfAbsent(BuffDefinitionSO definition, int sourceInstanceId)
+        {
+            if (definition == null)
+            {
+                return false;
+            }
+
+            RegisterBuffTarget();
+            IBuffService buffService = GetBuffService();
+            return buffService != null &&
+                buffService.TryApplyBuffIfAbsent(this, definition, sourceInstanceId);
+        }
+
+        /// <summary>玩家目标始终允许接收有害 Buff。</summary>
+        bool IBuffTarget.IsActive => isActiveAndEnabled && gameObject.activeInHierarchy;
+        bool IBuffTarget.IsAlive => IsAlive;
+        bool IBuffTarget.CanReceiveHarmfulEffects => true;
+
+        /// <summary>玩家移动速度由调用方按需读取，因此这里只保留统一通知接缝。</summary>
+        void IBuffTarget.OnBuffModifiersChanged(BuffModifierType modifierType)
+        {
+        }
+
+        /// <summary>向场景级 BuffManner 登记玩家目标。</summary>
+        private void RegisterBuffTarget()
+        {
+            GetBuffService()?.RegisterTarget(this);
+        }
+
+        /// <summary>取得容器服务，编辑器旧测试使用共享回退实例。</summary>
+        private IBuffService GetBuffService()
+        {
+            if (_buffService != null)
+            {
+                return _buffService;
+            }
+
+            return !Application.isPlaying ? EditorFallbackBuffManner : null;
         }
     }
 }

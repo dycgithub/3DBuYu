@@ -18,12 +18,20 @@ namespace CombatSystem
 
         [SerializeField] private CentralSkillActionKind actionKind;
         [Min(0f)] [SerializeField] private float value;
+        /// <summary>全局效果的限时长度；零表示持续到状态清理。</summary>
+        [Min(0f)] [SerializeField] private float effectDurationSeconds;
+        /// <summary>供减速、冻结或标记动作应用的主要限时 Buff。</summary>
+        [SerializeField] private BuffDefinitionSO primaryBuffDefinition;
+        /// <summary>冻结动作可选的第二种限时 Buff。</summary>
+        [SerializeField] private BuffDefinitionSO secondaryBuffDefinition;
 
         /// <summary>获取动作类型。</summary>
         public CentralSkillActionKind ActionKind => actionKind;
 
         /// <summary>获取动作使用的配置数值；未配置时使用动作类型的安全默认值。</summary>
         public float Value => value > 0f ? value : DefaultValue(actionKind);
+        /// <summary>获取当前动作的限时长度。</summary>
+        public float EffectDurationSeconds => Mathf.Max(0f, effectDurationSeconds);
 
         /// <summary>创建未保存到工程的动作配置，并应用五类动作的最小默认值。</summary>
         public static CentralSkillActionDefinitionSO CreateRuntime(CentralSkillActionKind kind)
@@ -62,6 +70,16 @@ namespace CombatSystem
                         Value,
                         out appliedTargetCount);
                 case CentralSkillActionKind.SlowAllEnemies:
+                    if (primaryBuffDefinition != null)
+                    {
+                        appliedTargetCount = context.CentralEffects?.ApplyBuffs(
+                            targets,
+                            primaryBuffDefinition,
+                            null,
+                            context.SourceInstanceId) ?? 0;
+                        return appliedTargetCount > 0;
+                    }
+
                     return context.CentralEffects != null &&
                         context.CentralEffects.TrySlowEnemies(
                             targets,
@@ -69,7 +87,22 @@ namespace CombatSystem
                             context.SourceInstanceId);
                 case CentralSkillActionKind.DoubleTransmitterFireRate:
                     return context.CentralEffects != null &&
-                        context.CentralEffects.TrySetTransmitterAttackSpeedMultiplier(
+                        context.CentralEffects.TrySetTransmitterSpeed(
+                            Value,
+                            context.SourceInstanceId,
+                            EffectDurationSeconds);
+                case CentralSkillActionKind.FreezeEnemies:
+                case CentralSkillActionKind.ApplyBuffToEnemies:
+                    appliedTargetCount = context.CentralEffects?.ApplyBuffs(
+                        targets,
+                        primaryBuffDefinition,
+                        secondaryBuffDefinition,
+                        context.SourceInstanceId) ?? 0;
+                    return appliedTargetCount > 0;
+                case CentralSkillActionKind.FocusHighestHealth:
+                    return context.CentralEffects != null &&
+                        context.CentralEffects.TryFocusHighestHealth(
+                            targets,
                             Value,
                             context.SourceInstanceId);
                 default:

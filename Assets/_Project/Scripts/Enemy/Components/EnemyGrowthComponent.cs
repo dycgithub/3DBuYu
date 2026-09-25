@@ -1,6 +1,6 @@
 using Interfaces;
 using Services;
-using SpatialSystem.Bridge;
+using SpatialIndexing;
 using UnityEngine;
 using Utils;
 using VContainer;
@@ -72,7 +72,7 @@ namespace EnemySystem.Components
             var targets = _spatialService.QueryRadius(
                 transform.position,
                 Mathf.Max(0f, _enemy.Attributes.growthConsumeRadius),
-                SpatialRegistry.LAYER_ENEMY);
+                SpatialLayers.Enemy);
             for (int index = 0; index < targets.Count; index++)
             {
                 if (targets[index] is Enemy target && target != _enemy && TryConsume(target))

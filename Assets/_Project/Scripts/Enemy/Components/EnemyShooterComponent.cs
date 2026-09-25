@@ -1,6 +1,5 @@
 using CombatSystem;
 using Interfaces;
-using Play;
 using Services;
 using UnityEngine;
 using Utils;
@@ -40,12 +39,12 @@ namespace EnemySystem.Components
         /// <summary>按攻击间隔尝试向玩家发射投射物。</summary>
         private void Update()
         {
-            if (_enemy == null || _enemy.IsDead || _enemy.Attributes == null)
+            if (_enemy == null || _enemy.IsDead || _enemy.Attributes == null ||
+                _enemy.GetAttackAllowedMultiplier() <= 0f)
             {
                 return;
             }
 
-            _playerTarget ??= FindFirstObjectByType<PlayerCombatTarget>();
             if (_playerTarget == null || !_playerTarget.IsAlive || _playerTarget.Transform == null)
             {
                 return;
@@ -68,7 +67,7 @@ namespace EnemySystem.Components
             _cooldown = Mathf.Max(0.01f, attributes.shooterFireInterval);
             _ability?.LaunchProjectile(
                 attributes.shooterProjectileProfile,
-                attributes.shooterDamage,
+                attributes.shooterDamage * _enemy.GetAttackDamageMultiplier(),
                 offset.normalized,
                 1,
                 0,

@@ -10,7 +10,7 @@ namespace GameSystem
     /// <summary>
     /// 基地-战斗场景交替加载器。挂在 DDOL(ScopeContainer)下,永不销毁。
     /// 进战斗:加载 GameLoopScene(Additive)→ 卸载 GameUIScene;
-    /// 回基地:卸载 GameLoopScene → 加载 GameUIScene。
+    /// 回基地:加载并激活 GameUIScene → 卸载 GameLoopScene。
     /// </summary>
     public class SceneLoader : MonoBehaviour
     {
@@ -28,13 +28,21 @@ namespace GameSystem
 
         private string _currentGameScene;
         private CanvasGroup _loadingGroup;
+        private bool _isTransitioning;
 
         /// <summary>
         /// 隐藏加载界面，等待场景加载请求。
         /// </summary>
         private void Awake()
         {
+            SceneManager.sceneLoaded += HandleSceneLoaded;
             SetLoadingVisible(false);
+        }
+
+        /// <summary>根对象销毁时解除场景加载事件订阅。</summary>
+        private void OnDestroy()
+        {
+            SceneManager.sceneLoaded -= HandleSceneLoaded;
         }
 
         /// <summary>
@@ -53,11 +61,12 @@ namespace GameSystem
         /// </summary>
         public void LoadGameScene()
         {
-            if (SceneManager.GetSceneByName(gameScene).isLoaded)
+            if (_isTransitioning || SceneManager.GetSceneByName(gameScene).isLoaded)
             {
                 return;
             }
 
+            _isTransitioning = true;
             StartCoroutine(LoadSceneAdditive(gameScene));
         }
 
@@ -66,6 +75,11 @@ namespace GameSystem
         /// </summary>
         public void ReturnToMainMenu()
         {
+            if (_isTransitioning)
+            {
+                return;
+            }
+
             if (string.IsNullOrEmpty(_currentGameScene))
             {
                 if (!SceneManager.GetSceneByName(gameScene).isLoaded)
@@ -76,6 +90,7 @@ namespace GameSystem
                 _currentGameScene = gameScene;
             }
 
+            _isTransitioning = true;
             StartCoroutine(UnloadGameScene());
         }
 
@@ -107,6 +122,12 @@ namespace GameSystem
                 yield return null;
             }
 
+            Scene loadedScene = SceneManager.GetSceneByName(sceneName);
+            if (loadedScene.IsValid() && loadedScene.isLoaded)
+            {
+                SceneManager.SetActiveScene(loadedScene);
+            }
+
             // 2. 卸载基地场景(全局容器/SceneLoader/LoadingPanel 均为 DDOL,不受影响)
             if (uiScene.isLoaded)
             {
@@ -120,6 +141,7 @@ namespace GameSystem
             SetLoadingVisible(false);
 
             _currentGameScene = sceneName;
+            _isTransitioning = false;
         }
 
         /// <summary>
@@ -129,7 +151,27 @@ namespace GameSystem
         {
             SetLoadingVisible(true);
 
-            // 1. 卸载战斗场景
+            // 1. 先加载并激活基地场景,再卸载当前活动的战斗场景。
+            Scene mainMenu = SceneManager.GetSceneByName(mainMenuScene);
+            if (!mainMenu.isLoaded)
+            {
+                AsyncOperation mainMenuLoadOperation =
+                    SceneManager.LoadSceneAsync(mainMenuScene, LoadSceneMode.Additive);
+                while (mainMenuLoadOperation != null && !mainMenuLoadOperation.isDone)
+                {
+                    yield return null;
+                }
+
+                mainMenu = SceneManager.GetSceneByName(mainMenuScene);
+            }
+
+            if (mainMenu.IsValid() && mainMenu.isLoaded)
+            {
+                SceneManager.SetActiveScene(mainMenu);
+                SetEventSystemsEnabled(mainMenu, true);
+            }
+
+            // 2. 卸载战斗场景
             AsyncOperation unloadOperation = SceneManager.UnloadSceneAsync(_currentGameScene);
             while (unloadOperation != null && !unloadOperation.isDone)
             {
@@ -137,14 +179,20 @@ namespace GameSystem
             }
             _currentGameScene = null;
 
-            // 2. 重新加载基地场景(Single 模式,此时无任何已加载场景)
-            AsyncOperation mainMenuLoadOperation = SceneManager.LoadSceneAsync(mainMenuScene, LoadSceneMode.Single);
-            while (mainMenuLoadOperation != null && !mainMenuLoadOperation.isDone)
+            SetLoadingVisible(false);
+            _isTransitioning = false;
+        }
+
+        /// <summary>在新场景的 Start 执行前切换 Active Scene，保证池实例归属正确。</summary>
+        private void HandleSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (!scene.IsValid() || !scene.isLoaded ||
+                (scene.name != gameScene && scene.name != mainMenuScene))
             {
-                yield return null;
+                return;
             }
 
-            SetLoadingVisible(false);
+            SceneManager.SetActiveScene(scene);
         }
 
         /// <summary>

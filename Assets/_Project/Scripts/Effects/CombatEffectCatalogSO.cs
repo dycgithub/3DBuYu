@@ -4,12 +4,14 @@ using UnityEngine;
 
 namespace EffectSystem
 {
-    /// <summary>单个战斗特效的预制体、生命周期与对象池配置。</summary>
+    /// <summary>单个战斗特效的预制体、缩放、生命周期与对象池配置。</summary>
     [Serializable]
     public sealed class EffectCatalogEntry
     {
         public EffectId Id;
         public GameObject Prefab;
+        [Tooltip("目录特效实例的统一缩放。")]
+        [Min(0.01f)] public float Scale = 1f;
         [Min(0f)] public float Lifetime;
         [Min(0)] public int PrewarmCount;
         [Min(1)] public int MaximumRetained = 64;
@@ -61,6 +63,7 @@ namespace EffectSystem
                     Debug.LogError($"[CombatEffectCatalogSO] {name} 存在重复配置键: {entry.Id}。", this);
                 if (entry.Prefab == null)
                     Debug.LogError($"[CombatEffectCatalogSO] {name} 的 {entry.Id} 未配置预制体。", this);
+                entry.Scale = Mathf.Max(0.01f, entry.Scale);
                 entry.MaximumRetained = Mathf.Max(1, entry.MaximumRetained);
                 entry.PrewarmCount = Mathf.Clamp(entry.PrewarmCount, 0, entry.MaximumRetained);
             }

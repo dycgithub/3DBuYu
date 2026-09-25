@@ -5,7 +5,7 @@ using UnityEngine;
 namespace CombatSystem
 {
     /// <summary>
-    /// 描述调用方已经准备好的技能和目标；执行器另行分配单次攻击身份。
+    /// 描述调用方已经准备好的技能、目标和物品强度；执行器另行分配单次攻击身份。
     /// </summary>
     public readonly struct SkillExecutionRequest
     {
@@ -17,6 +17,9 @@ namespace CombatSystem
 
         /// <summary>发起技能的实体世界坐标。</summary>
         public Vector3 SourcePosition { get; }
+
+        /// <summary>发起技能的物品实例强度等级；非物品技能使用零。</summary>
+        public int PowerLevel { get; }
 
         /// <summary>已经由调用方选择的目标快照。</summary>
         public IReadOnlyList<IDamageable> Targets { get; }
@@ -30,18 +33,21 @@ namespace CombatSystem
         /// <param name="sourcePosition">发起技能的世界坐标。</param>
         /// <param name="targets">调用方已经选择的目标；允许为空。</param>
         /// <param name="damageProcessor">可选的伤害处理器。</param>
+        /// <param name="powerLevel">发起技能的物品实例强度等级。</param>
         public SkillExecutionRequest(
             SkillDefinitionSO definition,
             int sourceInstanceId,
             Vector3 sourcePosition,
             IReadOnlyList<IDamageable> targets,
-            IDamageRequestProcessor damageProcessor = null)
+            IDamageRequestProcessor damageProcessor = null,
+            int powerLevel = 0)
         {
             Definition = definition;
             SourceInstanceId = sourceInstanceId;
             SourcePosition = sourcePosition;
             Targets = targets;
             DamageProcessor = damageProcessor;
+            PowerLevel = Supply.ItemPowerTable.NormalizeLevel(powerLevel);
         }
     }
 }

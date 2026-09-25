@@ -1,6 +1,9 @@
+using System;
 using System.Collections.Generic;
+using Interfaces;
 using UnityEngine;
 using Services;
+using VContainer;
 
 namespace EnemySystem.Spawning
 {
@@ -9,35 +12,13 @@ namespace EnemySystem.Spawning
     /// </summary>
     public class SpawnPositionProvider : MonoBehaviour, ISpawnPositionProvider
     {
-        private const float FallbackSpawnRadius = 10f;
-
         [SerializeField] private List<Transform> spawnPoints = new List<Transform>();
         [SerializeField] private Transform defaultSpawnPoint;
         [SerializeField] private float safeDistance = 10f;
         [SerializeField, Min(0f)] private float spawnJitterRadius = 0.5f;
 
-        private Transform _playerTransform;
+        [Inject] private IPlayerCombatTarget _playerTarget;
         private int _lastSpawnPointIndex = -1;
-
-        /// <summary>
-        /// 在场景启动时缓存玩家变换。
-        /// </summary>
-        private void Start()
-        {
-            CachePlayerTransform();
-        }
-
-        /// <summary>
-        /// 按 Player 标签查找并缓存玩家变换。
-        /// </summary>
-        private void CachePlayerTransform()
-        {
-            GameObject playerObject = GameObject.FindGameObjectWithTag("Player");
-            if (playerObject != null)
-            {
-                _playerTransform = playerObject.transform;
-            }
-        }
 
         /// <summary>
         /// 获取远离玩家的出生点，并为出生点添加确定性的轻微扰动。
@@ -45,14 +26,16 @@ namespace EnemySystem.Spawning
         /// <returns>敌人的世界出生位置。</returns>
         public Vector3 GetSpawnPosition()
         {
-            if (_playerTransform == null)
+            if (_playerTarget == null || _playerTarget.Transform == null)
             {
-                CachePlayerTransform();
+                throw new InvalidOperationException(
+                    "[SpawnPositionProvider] 未注入 IPlayerCombatTarget，无法计算安全出生点。");
             }
 
-            if (spawnPoints.Count > 0)
+            Transform playerTransform = _playerTarget.Transform;
+            if (spawnPoints != null && spawnPoints.Count > 0)
             {
-                int startIndex = Random.Range(0, spawnPoints.Count);
+                int startIndex = UnityEngine.Random.Range(0, spawnPoints.Count);
                 for (int offset = 0; offset < spawnPoints.Count; offset++)
                 {
                     int index = (startIndex + offset) % spawnPoints.Count;
@@ -68,8 +51,7 @@ namespace EnemySystem.Spawning
                     }
 
                     Vector3 candidate = point.position + CalculateSpawnOffset(index);
-                    if (_playerTransform != null
-                        && Vector3.Distance(candidate, _playerTransform.position) < safeDistance)
+                    if (Vector3.Distance(candidate, playerTransform.position) < safeDistance)
                     {
                         continue;
                     }
@@ -84,7 +66,8 @@ namespace EnemySystem.Spawning
                 return defaultSpawnPoint.position;
             }
 
-            return transform.position + Random.insideUnitSphere * FallbackSpawnRadius;
+            throw new InvalidOperationException(
+                "[SpawnPositionProvider] 未配置有效 spawnPoints 或 defaultSpawnPoint。");
         }
 
         /// <summary>

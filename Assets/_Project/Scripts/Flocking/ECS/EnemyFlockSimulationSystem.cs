@@ -5,6 +5,7 @@ using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
 using Unity.Transforms;
+using SpatialIndexing;
 
 namespace FlockingSystem.ECS
 {
@@ -15,15 +16,12 @@ namespace FlockingSystem.ECS
     [UpdateInGroup(typeof(SimulationSystemGroup))]
     public partial struct EnemyFlockSimulationSystem : ISystem
     {
+        /// <summary>启用代理的群游模拟查询。</summary>
         private EntityQuery _agentQuery;
+
+        /// <summary>唯一的世界配置查询。</summary>
         private EntityQuery _configQuery;
-        private NativeArray<byte> _active;
-        private NativeArray<float3> _positions;
-        private NativeArray<float3> _velocities;
-        private NativeArray<int> _cellCounts;
-        private NativeArray<int> _cellStarts;
-        private NativeArray<int> _cellWriteHeads;
-        private NativeArray<int> _sortedSlots;
+
         private ComponentTypeHandle<LocalTransform> _localTransformHandle;
         private ComponentTypeHandle<EnemyFlockAgent> _agentReadOnlyHandle;
         private ComponentTypeHandle<EnemyFlockAgent> _agentReadWriteHandle;
@@ -32,6 +30,7 @@ namespace FlockingSystem.ECS
         private ComponentTypeHandle<EnemyFlockChunkGoal> _chunkGoalHandle;
         private EntityTypeHandle _entityHandle;
 
+        /// <summary>创建代理查询、组件句柄和共享空间索引系统。</summary>
         public void OnCreate(ref SystemState state)
         {
             _agentQuery = state.GetEntityQuery(
@@ -52,41 +51,18 @@ namespace FlockingSystem.ECS
             _chunkGoalHandle = state.GetComponentTypeHandle<EnemyFlockChunkGoal>(false);
             _entityHandle = state.GetEntityTypeHandle();
 
-            _active = new NativeArray<byte>(
-                EnemyFlockLimits.MaximumAgents,
-                Allocator.Persistent);
-            _positions = new NativeArray<float3>(
-                EnemyFlockLimits.MaximumAgents,
-                Allocator.Persistent);
-            _velocities = new NativeArray<float3>(
-                EnemyFlockLimits.MaximumAgents,
-                Allocator.Persistent);
-            _cellCounts = new NativeArray<int>(
-                EnemyFlockLimits.MaximumGridCells,
-                Allocator.Persistent);
-            _cellStarts = new NativeArray<int>(
-                EnemyFlockLimits.MaximumGridCells + 1,
-                Allocator.Persistent);
-            _cellWriteHeads = new NativeArray<int>(
-                EnemyFlockLimits.MaximumGridCells,
-                Allocator.Persistent);
-            _sortedSlots = new NativeArray<int>(
-                EnemyFlockLimits.MaximumAgents,
-                Allocator.Persistent);
+            state.World.GetOrCreateSystemManaged<SpatialIndexSystem>();
         }
 
+        /// <summary>等待本系统提交的 Job，交由共享空间网格负责数组释放。</summary>
         public void OnDestroy(ref SystemState state)
         {
             state.Dependency.Complete();
-            Dispose(ref _active);
-            Dispose(ref _positions);
-            Dispose(ref _velocities);
-            Dispose(ref _cellCounts);
-            Dispose(ref _cellStarts);
-            Dispose(ref _cellWriteHeads);
-            Dispose(ref _sortedSlots);
         }
 
+        /// <summary>
+        /// 采集位置和速度快照，构建空间网格，再并行计算下一姿态。
+        /// </summary>
         public void OnUpdate(ref SystemState state)
         {
             if (_configQuery.IsEmptyIgnoreFilter || _agentQuery.CalculateEntityCount() == 0)
@@ -95,6 +71,11 @@ namespace FlockingSystem.ECS
             }
 
             EnemyFlockWorldConfig config = _configQuery.GetSingleton<EnemyFlockWorldConfig>();
+            SpatialIndexSystem spatial = state.World.GetExistingSystemManaged<SpatialIndexSystem>();
+            ContinuousSpatialGrid grid = spatial.Enemies;
+            // Configure 等待上一帧网格读者；其余 ECS 依赖保留到后续 Job 调度，避免主线程提前阻塞。
+            grid.Configure(config.GridOrigin, config.GridCellSize, config.GridDimensions, config.AgentCapacity);
+            spatial.Service?.CaptureEnemies();
             _localTransformHandle.Update(ref state);
             _agentReadOnlyHandle.Update(ref state);
             _agentReadWriteHandle.Update(ref state);
@@ -103,34 +84,28 @@ namespace FlockingSystem.ECS
             _chunkGoalHandle.Update(ref state);
             _entityHandle.Update(ref state);
 
-            JobHandle dependency = state.Dependency;
-            dependency = new EnemyFlockClearSnapshotJob
+            JobHandle dependency = JobHandle.CombineDependencies(state.Dependency, grid.Fence);
+            if (spatial.Service == null)
             {
-                Active = _active,
-            }.Schedule(EnemyFlockLimits.MaximumAgents, 64, dependency);
+                dependency = new EnemyFlockClearSnapshotJob
+                {
+                    Active = grid.Active,
+                }.Schedule(grid.Active.Length, 64, dependency);
+            }
 
             dependency = new EnemyFlockGatherJob
             {
                 LocalTransformHandle = _localTransformHandle,
                 AgentHandle = _agentReadOnlyHandle,
                 BridgeIndexHandle = _bridgeIndexHandle,
-                Active = _active,
-                Positions = _positions,
-                Velocities = _velocities,
-                AgentCapacity = config.AgentCapacity,
+                Active = grid.Active,
+                Positions = grid.Positions,
+                Velocities = grid.Velocities,
+                UseSpatialSlots = spatial.Service != null,
             }.ScheduleParallel(_agentQuery, dependency);
 
-            dependency = new EnemyFlockBuildGridJob
-            {
-                Active = _active,
-                Positions = _positions,
-                CellCounts = _cellCounts,
-                CellStarts = _cellStarts,
-                CellWriteHeads = _cellWriteHeads,
-                SortedSlots = _sortedSlots,
-                Config = config,
-                AgentCapacity = config.AgentCapacity,
-            }.Schedule(dependency);
+            dependency = grid.Build(dependency);
+            spatial.Service?.MarkEnemyGridBuilt();
 
             state.Dependency = new EnemyFlockStepJob
             {
@@ -140,23 +115,22 @@ namespace FlockingSystem.ECS
                 NextPoseHandle = _nextPoseHandle,
                 BridgeIndexHandle = _bridgeIndexHandle,
                 ChunkGoalHandle = _chunkGoalHandle,
-                Active = _active,
-                Positions = _positions,
-                Velocities = _velocities,
-                CellStarts = _cellStarts,
-                SortedSlots = _sortedSlots,
+                Active = grid.Active,
+                Positions = grid.Positions,
+                Velocities = grid.Velocities,
+                CellStarts = grid.Starts,
+                SortedSlots = grid.Slots,
+                UseSpatialSlots = spatial.Service != null,
                 Config = config,
+                Grid = new GridLayout(
+                    config.GridOrigin,
+                    config.GridCellSize,
+                    config.GridDimensions),
                 DeltaTime = math.min(SystemAPI.Time.DeltaTime, config.MaxDeltaTime),
             }.ScheduleParallel(_agentQuery, dependency);
+            grid.Fence = state.Dependency;
         }
 
-        private static void Dispose<T>(ref NativeArray<T> array) where T : struct
-        {
-            if (array.IsCreated)
-            {
-                array.Dispose();
-            }
-        }
     }
 
     /// <summary>
@@ -173,20 +147,80 @@ namespace FlockingSystem.ECS
         [ReadOnly] public ComponentTypeHandle<EnemyFlockBridgeIndex> BridgeIndexHandle;
         public ComponentTypeHandle<EnemyFlockChunkGoal> ChunkGoalHandle;
 
+        /// <summary>快照槽位的有效标记。</summary>
         [ReadOnly] public NativeArray<byte> Active;
+
+        /// <summary>按空间槽位保存的代理位置。</summary>
         [ReadOnly] public NativeArray<float3> Positions;
+
+        /// <summary>按空间槽位保存的代理速度。</summary>
         [ReadOnly] public NativeArray<float3> Velocities;
+
+        /// <summary>每个网格单元在 SortedSlots 中的起止区间。</summary>
         [ReadOnly] public NativeArray<int> CellStarts;
+
+        /// <summary>按网格单元连续排列的代理槽位。</summary>
         [ReadOnly] public NativeArray<int> SortedSlots;
 
+        private const float MinimumVelocitySquared = 0.0001f;
+
+        /// <summary>本次模拟使用的世界配置快照。</summary>
         public EnemyFlockWorldConfig Config;
+
+        /// <summary>本次模拟使用的只读网格布局，避免每个代理重复构造。</summary>
+        public GridLayout Grid;
+
+        /// <summary>是否使用托管空间服务提供的位置快照。</summary>
+        public bool UseSpatialSlots;
+
+        /// <summary>经过世界配置限制后的模拟步长，单位为秒。</summary>
         public float DeltaTime;
 
+        /// <summary>处理一个 ECS Chunk；Chunk 目标只在该 Chunk 内共享。</summary>
         public void Execute(
             in ArchetypeChunk chunk,
             int unfilteredChunkIndex,
             bool useEnabledMask,
             in v128 chunkEnabledMask)
+        {
+            EnemyFlockChunkGoal goal = UpdateChunkGoal(chunk, unfilteredChunkIndex);
+
+            var transforms = chunk.GetNativeArray(ref LocalTransformHandle);
+            var agents = chunk.GetNativeArray(ref AgentHandle);
+            var nextPoses = chunk.GetNativeArray(ref NextPoseHandle);
+            var bridgeIndices = chunk.GetNativeArray(ref BridgeIndexHandle);
+            var entityEnumerator = new ChunkEntityEnumerator(
+                useEnabledMask,
+                chunkEnabledMask,
+                chunk.Count);
+
+            while (entityEnumerator.NextEntityIndex(out int entityIndex))
+            {
+                if (!TryGetAgentSnapshot(
+                        bridgeIndices[entityIndex],
+                        transforms[entityIndex].Position,
+                        out float3 position,
+                        out int steeringSlot))
+                {
+                    continue;
+                }
+
+                EnemyFlockAgent agent = agents[entityIndex];
+                EnemyFlockNextPose nextPose = SimulateAgent(
+                    ref agent,
+                    position,
+                    transforms[entityIndex].Rotation,
+                    steeringSlot,
+                    goal.GoalPosition);
+                agents[entityIndex] = agent;
+                nextPoses[entityIndex] = nextPose;
+            }
+        }
+
+        /// <summary>初始化或推进 Chunk 目标点及其随机状态。</summary>
+        private EnemyFlockChunkGoal UpdateChunkGoal(
+            in ArchetypeChunk chunk,
+            int unfilteredChunkIndex)
         {
             var entities = chunk.GetNativeArray(EntityHandle);
             EnemyFlockChunkGoal goal = chunk.GetChunkComponentData(ref ChunkGoalHandle);
@@ -214,96 +248,115 @@ namespace FlockingSystem.ECS
 
             goal.RandomState = random.state;
             chunk.SetChunkComponentData(ref ChunkGoalHandle, goal);
-
-            var transforms = chunk.GetNativeArray(ref LocalTransformHandle);
-            var agents = chunk.GetNativeArray(ref AgentHandle);
-            var nextPoses = chunk.GetNativeArray(ref NextPoseHandle);
-            var bridgeIndices = chunk.GetNativeArray(ref BridgeIndexHandle);
-            var entityEnumerator = new ChunkEntityEnumerator(
-                useEnabledMask,
-                chunkEnabledMask,
-                chunk.Count);
-
-            while (entityEnumerator.NextEntityIndex(out int entityIndex))
-            {
-                int slot = bridgeIndices[entityIndex].Value;
-                if ((uint)slot >= (uint)Config.AgentCapacity || Active[slot] == 0)
-                {
-                    continue;
-                }
-
-                EnemyFlockAgent agent = agents[entityIndex];
-                float3 position = transforms[entityIndex].Position;
-                quaternion rotation = transforms[entityIndex].Rotation;
-                float3 externalDisplacement = agent.ExternalImpulse * math.max(0f, DeltaTime);
-                if (agent.UseExternalMotion)
-                {
-                    agent.ExternalImpulse = float3.zero;
-                    nextPoses[entityIndex] = new EnemyFlockNextPose
-                    {
-                        Position = position + externalDisplacement,
-                        Rotation = rotation,
-                    };
-                    agents[entityIndex] = agent;
-                    continue;
-                }
-
-                float3 velocity = agent.Velocity;
-                if (math.lengthsq(velocity) <= 0.0001f)
-                {
-                    float speed = math.clamp(agent.Speed, agent.MinSpeed, agent.MaxSpeed);
-                    velocity = math.mul(rotation, new float3(0f, 0f, speed));
-                }
-
-                float3 acceleration = CalculateSteering(
-                    slot,
-                    position,
-                    velocity,
-                    agent,
-                    goal.GoalPosition);
-                velocity = EnemyFlockBoidsMath.IntegrateVelocity(
-                    velocity,
-                    acceleration,
-                    DeltaTime,
-                    agent.MinSpeed,
-                    agent.MaxSpeed,
-                    Config.MaxAcceleration);
-                agent.Velocity = velocity;
-                agent.Speed = math.length(velocity);
-
-                bool outsideBounds = math.any(
-                    position < Config.SwimCenter - Config.SwimLimits)
-                    || math.any(position > Config.SwimCenter + Config.SwimLimits);
-                float rotationSpeed = outsideBounds
-                    ? agent.RotationSpeed * Config.OutsideBoundsRotationMultiplier
-                    : agent.RotationSpeed;
-
-                if (math.lengthsq(velocity) > 0.0001f)
-                {
-                    float3 fallbackForward = math.mul(
-                        rotation,
-                        new float3(0f, 0f, 1f));
-                    quaternion targetRotation = quaternion.LookRotationSafe(
-                        math.normalizesafe(velocity, fallbackForward),
-                        math.up());
-                    rotation = math.slerp(
-                        rotation,
-                        targetRotation,
-                        math.saturate(rotationSpeed * DeltaTime));
-                }
-
-                agent.ExternalImpulse = float3.zero;
-                nextPoses[entityIndex] = new EnemyFlockNextPose
-                {
-                    Position = position + EnemyFlockBoidsMath.CalculateMovementDelta(
-                        agent,
-                        DeltaTime) + externalDisplacement,
-                    Rotation = rotation,
-                };
-                agents[entityIndex] = agent;
-            }
+            return goal;
         }
 
+        /// <summary>选择托管空间快照或 ECS 当前姿态，并返回邻居查询槽位。</summary>
+        private bool TryGetAgentSnapshot(
+            EnemyFlockBridgeIndex bridgeIndex,
+            float3 fallbackPosition,
+            out float3 position,
+            out int steeringSlot)
+        {
+            int flockSlot = bridgeIndex.FlockSlot;
+            int spatialSlot = bridgeIndex.SpatialSlot;
+            bool hasSpatialSnapshot = UseSpatialSlots &&
+                (uint)spatialSlot < (uint)Active.Length &&
+                Active[spatialSlot] != 0;
+
+            // 没有托管空间服务时，缺失快照代表代理已被移除；跳过它可避免提交旧姿态。
+            if (!UseSpatialSlots &&
+                ((uint)flockSlot >= (uint)Active.Length || Active[flockSlot] == 0))
+            {
+                position = float3.zero;
+                steeringSlot = -1;
+                return false;
+            }
+
+            position = hasSpatialSnapshot
+                ? Positions[spatialSlot]
+                : fallbackPosition;
+            steeringSlot = UseSpatialSlots
+                ? (hasSpatialSnapshot ? spatialSlot : -1)
+                : flockSlot;
+            return true;
+        }
+
+        /// <summary>消费一个代理的外部冲量，执行群游积分并生成下一姿态。</summary>
+        private EnemyFlockNextPose SimulateAgent(
+            ref EnemyFlockAgent agent,
+            float3 position,
+            quaternion rotation,
+            int steeringSlot,
+            float3 goalPosition)
+        {
+            float3 externalDisplacement = agent.ExternalImpulse * math.max(0f, DeltaTime);
+            if (agent.UseExternalMotion)
+            {
+                agent.ExternalImpulse = float3.zero;
+                return new EnemyFlockNextPose
+                {
+                    Position = position + externalDisplacement,
+                    Rotation = rotation,
+                };
+            }
+
+            float3 velocity = agent.Velocity;
+            if (math.lengthsq(velocity) <= MinimumVelocitySquared)
+            {
+                float speed = math.clamp(agent.Speed, agent.MinSpeed, agent.MaxSpeed);
+                velocity = math.mul(rotation, new float3(0f, 0f, speed));
+            }
+
+            float3 acceleration = CalculateSteering(
+                steeringSlot,
+                position,
+                velocity,
+                agent,
+                goalPosition);
+            velocity = EnemyFlockBoidsMath.IntegrateVelocity(
+                velocity,
+                acceleration,
+                DeltaTime,
+                agent.MinSpeed,
+                agent.MaxSpeed,
+                Config.MaxAcceleration);
+            agent.Velocity = velocity;
+            agent.Speed = math.length(velocity);
+
+            bool outsideBounds = math.any(
+                position < Config.SwimCenter - Config.SwimLimits)
+                || math.any(position > Config.SwimCenter + Config.SwimLimits);
+            float rotationSpeed = outsideBounds
+                ? agent.RotationSpeed * Config.OutsideBoundsRotationMultiplier
+                : agent.RotationSpeed;
+
+            if (math.lengthsq(velocity) > MinimumVelocitySquared)
+            {
+                float3 fallbackForward = math.mul(
+                    rotation,
+                    new float3(0f, 0f, 1f));
+                quaternion targetRotation = quaternion.LookRotationSafe(
+                    math.normalizesafe(velocity, fallbackForward),
+                    math.up());
+                rotation = math.slerp(
+                    rotation,
+                    targetRotation,
+                    math.saturate(rotationSpeed * DeltaTime));
+            }
+
+            // 外部冲量只消费一次；普通群游位移由更新后的速度计算。
+            agent.ExternalImpulse = float3.zero;
+            return new EnemyFlockNextPose
+            {
+                Position = position + EnemyFlockBoidsMath.CalculateMovementDelta(
+                    agent,
+                    DeltaTime) + externalDisplacement,
+                Rotation = rotation,
+            };
+        }
+
+        /// <summary>在相邻网格单元内收集有限候选，并合成 Boids 转向向量。</summary>
         private float3 CalculateSteering(
             int slot,
             float3 position,
@@ -320,15 +373,15 @@ namespace FlockingSystem.ECS
             float neighbourDistance = math.max(0f, agent.NeighbourDistance);
             float separationDistance = math.max(0f, agent.SeparationDistance);
             float interactionDistance = math.max(neighbourDistance, separationDistance);
-            float cellSize = math.max(Config.GridCellSize, 0.0001f);
+            float cellSize = Grid.CellSize;
             int cellRadius = (int)math.ceil(interactionDistance / cellSize);
-            int3 dimensions = math.max(Config.GridDimensions, new int3(1));
+            int3 dimensions = Grid.Dimensions;
             int maximumCellRadius = math.max(
                 dimensions.x,
                 math.max(dimensions.y, dimensions.z));
             cellRadius = math.min(cellRadius, maximumCellRadius);
             int candidateLimit = math.max(0, Config.MaximumNeighbourCandidates);
-            int3 centerCell = EnemyFlockGridMath.CalculateCellCoordinates(position, Config);
+            int3 centerCell = Grid.Cell(position);
             float neighbourDistanceSquared = neighbourDistance * neighbourDistance;
             float separationDistanceSquared = separationDistance * separationDistance;
 
@@ -354,7 +407,7 @@ namespace FlockingSystem.ECS
                             examinedCount++;
                             int otherSlot = SortedSlots[index];
                             if (otherSlot == slot
-                                || (uint)otherSlot >= (uint)Config.AgentCapacity
+                                || (uint)otherSlot >= (uint)Active.Length
                                 || Active[otherSlot] == 0)
                             {
                                 continue;
@@ -408,6 +461,7 @@ namespace FlockingSystem.ECS
                 + math.normalizesafe(boundary, float3.zero) * Config.BoundaryWeight;
         }
 
+        /// <summary>在游动区域内生成一个随机世界目标点。</summary>
         private float3 GetRandomGoal(ref Random random)
         {
             return Config.SwimCenter + new float3(

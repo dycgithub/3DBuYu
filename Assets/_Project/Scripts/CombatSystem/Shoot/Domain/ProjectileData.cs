@@ -29,6 +29,8 @@ namespace CombatSystem
         public float MaximumTravelDistance;
         /// <summary>碰撞扫掠半径。</summary>
         public float CollisionRadius;
+        /// <summary>一次攻击实际支付的基础能量。</summary>
+        public float EnergyCost;
         /// <summary>剩余穿透次数。</summary>
         public int PenetrationCount;
         /// <summary>伤害类型。</summary>
@@ -37,5 +39,17 @@ namespace CombatSystem
         public bool WasCritical;
         /// <summary>本次投射物允许命中的目标阵营。</summary>
         public ProjectileTargetMode TargetMode;
+
+        /// <summary>标记分裂生成的子弹，防止再次触发分裂。</summary>
+        public bool IsSplitChild;
+
+        /// <summary>标记速度随机变化已应用，避免分裂子弹重复随机。</summary>
+        public bool HasAppliedSpeedVariance;
+
+        /// <summary>本次攻击的每秒攻击次数，供顺序发射计算批次时长。</summary>
+        public float AttacksPerSecond;
+
+        /// <summary>标记弹速倍率已应用，避免分裂子弹重复加速。</summary>
+        public bool HasAppliedSpeedMultiplier;
     }
 }

@@ -18,14 +18,18 @@ namespace Services
         /// 创建一个敌人并加入当前存活集合。
         /// </summary>
         /// <param name="prefab">怪物预制体。</param>
-        /// <param name="rank">数量分类。</param>
+        /// <param name="category">生成分类。</param>
         /// <param name="healthMultiplier">生命倍率。</param>
         /// <param name="speedMultiplier">速度倍率。</param>
         /// <returns>实际生成成功时返回 true，失败不消费配额。</returns>
-        bool TrySpawnEnemy(Enemy prefab, EnemyRank rank, float healthMultiplier, float speedMultiplier);
+        bool TrySpawnEnemy(
+            Enemy prefab,
+            EnemySpawnCategory category,
+            float healthMultiplier,
+            float speedMultiplier);
 
-        /// <summary>读取独立配额分类的实际存活数。</summary>
-        int CountRank(EnemyRank rank);
+        /// <summary>读取指定生成分类的实际存活数。</summary>
+        int CountCategory(EnemySpawnCategory category);
 
         /// <summary>清除所有当前存活敌人。</summary>
         void ClearAll();

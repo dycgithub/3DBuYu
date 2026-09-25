@@ -132,6 +132,24 @@ namespace Play
             return null;
         }
 
+        /// <summary>
+        /// 替换指定端口当前运行实例的发射音效，不修改端口配置资产。
+        /// </summary>
+        /// <param name="portId">发射端口稳定标识。</param>
+        /// <param name="clip">运行时音效；空值表示恢复默认音效。</param>
+        /// <returns>找到端口并完成设置时返回 true。</returns>
+        public bool TrySetFireSound(string portId, AudioClip clip)
+        {
+            CentralTransmitterRuntime port = GetPortById(portId);
+            if (port == null)
+            {
+                return false;
+            }
+
+            port.SetFireSoundOverride(clip);
+            return true;
+        }
+
         public void Dispose()
         {
             if (_disposed)

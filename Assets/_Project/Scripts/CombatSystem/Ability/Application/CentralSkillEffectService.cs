@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using EnemySystem;
 using Interfaces;
 using Play;
 using UnityEngine;
@@ -13,15 +14,19 @@ namespace CombatSystem
     {
         private readonly CentralCore _centralCore;
         private readonly ITransmitterGlobalEffectService _transmitterEffects;
-        private readonly List<PermanentSlowTarget> _permanentSlowTargets = new();
+        private readonly IBuffService _buffService;
+        private readonly HashSet<int> _permanentSourceInstanceIds = new();
+        private readonly List<PermanentSlowTarget> _legacyPermanentSlowTargets = new();
 
-        /// <summary>注入当前中央核心和发射器全局效果状态。</summary>
+        /// <summary>注入当前中央核心、发射器全局效果和场景级 Buff 服务。</summary>
         public CentralSkillEffectService(
             CentralCore centralCore,
-            ITransmitterGlobalEffectService transmitterEffects)
+            ITransmitterGlobalEffectService transmitterEffects,
+            IBuffService buffService = null)
         {
             _centralCore = centralCore;
             _transmitterEffects = transmitterEffects;
+            _buffService = buffService;
         }
 
         /// <summary>调用中央核心现有端口解锁入口。</summary>
@@ -84,12 +89,22 @@ namespace CombatSystem
                     continue;
                 }
 
-                if (motionTarget is IPermanentEnemyMotionEffectTarget permanentTarget)
+                if (_buffService != null && motionTarget is IBuffTarget buffTarget)
                 {
+                    // 正式运行时永久效果只进入场景级 BuffManner，不在 Enemy 或本服务中保存目标状态。
+                    _buffService.SetPermanentMovementSpeedMultiplier(
+                        buffTarget,
+                        speedMultiplier,
+                        sourceInstanceId);
+                    _permanentSourceInstanceIds.Add(sourceInstanceId);
+                }
+                else if (motionTarget is IPermanentEnemyMotionEffectTarget permanentTarget)
+                {
+                    // 没有容器的旧编辑器测试仍走兼容入口。
                     permanentTarget.SetPermanentMovementSpeedMultiplier(
                         speedMultiplier,
                         sourceInstanceId);
-                    TrackPermanentSlow(permanentTarget, sourceInstanceId);
+                    TrackLegacyPermanentSlow(permanentTarget, sourceInstanceId);
                 }
                 else
                 {
@@ -102,9 +117,10 @@ namespace CombatSystem
         }
 
         /// <summary>只向全局发射器效果边界提交倍率，具体攻击系统自行消费。</summary>
-        public bool TrySetTransmitterAttackSpeedMultiplier(
+        public bool TrySetTransmitterSpeed(
             float multiplier,
-            int sourceInstanceId)
+            int sourceInstanceId,
+            float durationSeconds)
         {
             if (_transmitterEffects == null)
             {
@@ -113,6 +129,90 @@ namespace CombatSystem
 
             _transmitterEffects.SetAttackSpeedMultiplier(
                 Mathf.Max(0f, multiplier),
+                sourceInstanceId,
+                Mathf.Max(0f, durationSeconds));
+            return true;
+        }
+
+        /// <summary>对有效敌人提交配置的一个或两个限时 Buff。</summary>
+        public int ApplyBuffs(
+            IReadOnlyList<IDamageable> targets,
+            BuffDefinitionSO primary,
+            BuffDefinitionSO secondary,
+            int sourceInstanceId)
+        {
+            if (targets == null || (primary == null && secondary == null) || _buffService == null)
+            {
+                return 0;
+            }
+
+            int affectedCount = 0;
+            for (int index = 0; index < targets.Count; index++)
+            {
+                IDamageable target = targets[index];
+                if (target?.Transform == null || !target.IsAlive)
+                {
+                    continue;
+                }
+
+                IBuffTarget buffTarget = target.Transform.GetComponentInParent<IBuffTarget>();
+                if (buffTarget == null || !buffTarget.IsActive || !buffTarget.IsAlive ||
+                    ((primary != null && primary.Polarity == BuffPolarity.Harmful ||
+                      secondary != null && secondary.Polarity == BuffPolarity.Harmful) &&
+                     !buffTarget.CanReceiveHarmfulEffects))
+                {
+                    continue;
+                }
+
+                if (primary != null)
+                {
+                    _buffService.ApplyBuff(buffTarget, primary, sourceInstanceId);
+                }
+
+                if (secondary != null)
+                {
+                    _buffService.ApplyBuff(buffTarget, secondary, sourceInstanceId);
+                }
+
+                affectedCount++;
+            }
+
+            return affectedCount;
+        }
+
+        /// <summary>在目标快照中选择生命值最高的敌人并提交限时集火状态。</summary>
+        public bool TryFocusHighestHealth(
+            IReadOnlyList<IDamageable> targets,
+            float durationSeconds,
+            int sourceInstanceId)
+        {
+            if (targets == null || durationSeconds <= 0f || _transmitterEffects == null)
+            {
+                return false;
+            }
+
+            Enemy highestHealthEnemy = null;
+            for (int index = 0; index < targets.Count; index++)
+            {
+                IDamageable target = targets[index];
+                Enemy enemy = target?.Transform != null
+                    ? target.Transform.GetComponentInParent<Enemy>()
+                    : null;
+                if (enemy != null && !enemy.IsDead &&
+                    (highestHealthEnemy == null || enemy.CurrentHealth > highestHealthEnemy.CurrentHealth))
+                {
+                    highestHealthEnemy = enemy;
+                }
+            }
+
+            if (highestHealthEnemy == null)
+            {
+                return false;
+            }
+
+            _transmitterEffects.SetFocusedTarget(
+                highestHealthEnemy,
+                durationSeconds,
                 sourceInstanceId);
             return true;
         }
@@ -120,30 +220,39 @@ namespace CombatSystem
         /// <summary>清理本服务提交的按来源永久减速。</summary>
         public void ClearPermanentEffects()
         {
-            for (int index = _permanentSlowTargets.Count - 1; index >= 0; index--)
+            if (_buffService != null)
             {
-                PermanentSlowTarget entry = _permanentSlowTargets[index];
+                foreach (int sourceInstanceId in _permanentSourceInstanceIds)
+                {
+                    _buffService.ClearPermanentMovementSpeedMultipliersBySourceId(sourceInstanceId);
+                }
+            }
+
+            for (int index = _legacyPermanentSlowTargets.Count - 1; index >= 0; index--)
+            {
+                PermanentSlowTarget entry = _legacyPermanentSlowTargets[index];
                 entry.Target.ClearPermanentMovementSpeedMultiplier(entry.SourceInstanceId);
             }
 
-            _permanentSlowTargets.Clear();
+            _permanentSourceInstanceIds.Clear();
+            _legacyPermanentSlowTargets.Clear();
         }
 
-        /// <summary>记录尚未记录的目标来源组合，避免清理时重复提交。</summary>
-        private void TrackPermanentSlow(
+        /// <summary>记录旧兼容目标的来源组合，避免清理时重复提交。</summary>
+        private void TrackLegacyPermanentSlow(
             IPermanentEnemyMotionEffectTarget target,
             int sourceInstanceId)
         {
-            for (int index = 0; index < _permanentSlowTargets.Count; index++)
+            for (int index = 0; index < _legacyPermanentSlowTargets.Count; index++)
             {
-                PermanentSlowTarget entry = _permanentSlowTargets[index];
+                PermanentSlowTarget entry = _legacyPermanentSlowTargets[index];
                 if (ReferenceEquals(entry.Target, target) && entry.SourceInstanceId == sourceInstanceId)
                 {
                     return;
                 }
             }
 
-            _permanentSlowTargets.Add(new PermanentSlowTarget(target, sourceInstanceId));
+            _legacyPermanentSlowTargets.Add(new PermanentSlowTarget(target, sourceInstanceId));
         }
 
         private readonly struct PermanentSlowTarget

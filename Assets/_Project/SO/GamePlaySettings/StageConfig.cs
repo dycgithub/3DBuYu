@@ -30,6 +30,19 @@ namespace GameSystem
         [Min(0f)]
         public float baseEnergyDrainPerSecond = 1f;
 
+        [Header("超时")]
+        [Tooltip("进入超时时使用的初始能量消耗倍率。")]
+        [Min(0f)]
+        public float overtimeStartMultiplier = 2f;
+
+        [Tooltip("超时倍率增加一次所需的时间（秒）。")]
+        [Min(0.01f)]
+        public float overtimeMultiplierIntervalSeconds = 5f;
+
+        [Tooltip("每经过一次超时倍率间隔增加的倍率；不设置上限。")]
+        [Min(0f)]
+        public float overtimeMultiplierIncrement = 1f;
+
         [Header("连杀")]
         [Tooltip("两次击杀之间允许保持连杀的最长间隔（秒）。")]
         [Min(0f)]

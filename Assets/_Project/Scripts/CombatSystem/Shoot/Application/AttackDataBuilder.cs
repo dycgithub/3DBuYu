@@ -47,6 +47,14 @@ namespace CombatSystem
                 damageAmount *= build.CriticalDamageMultiplier;
             }
 
+            float attacksPerSecond = Mathf.Max(0.001f, build.AttacksPerSecond);
+            if (build.ProjectileProfile.TrajectoryDefinition is LaserTrajectoryDefinitionSO laser)
+            {
+                float tickRate = Mathf.Max(1f, laser.TicksPerSecond);
+                damageAmount *= attacksPerSecond / tickRate;
+                attacksPerSecond = tickRate;
+            }
+
             attackData = new AttackData
             {
                 SourceInstanceId = input.SourceInstanceId,
@@ -55,8 +63,9 @@ namespace CombatSystem
                 OriginPosition = input.OriginPosition,
                 LaunchDirection = launchDirection,
                 DamageAmount = Mathf.Max(0f, damageAmount),
-                EnergyCost = Mathf.Max(0f, build.ProjectileProfile.EnergyCost),
-                AttacksPerSecond = Mathf.Max(0.001f, build.AttacksPerSecond),
+                EnergyCost = Mathf.Max(0f,
+                    build.ProjectileProfile.EnergyCost * build.EnergyCostMultiplier),
+                AttacksPerSecond = attacksPerSecond,
                 ProjectileCount = Mathf.Max(1, build.ProjectileCount),
                 PenetrationCount = Mathf.Max(0, build.PenetrationCount),
                 DamageType = build.DamageType,

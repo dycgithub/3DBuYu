@@ -1,4 +1,5 @@
 using System;
+using EffectSystem;
 using UnityEngine;
 using VContainer;
 using VContainer.Unity;
@@ -13,6 +14,7 @@ namespace Play
     {
         private readonly IObjectResolver _resolver;
         private GameObject _modelInstance;
+        private AudioClip _fireSoundOverride;
         private bool _disposed;
 
         public TransmitterSO So { get; }
@@ -21,6 +23,10 @@ namespace Play
         public string PortId { get; }
         public Transform FirePoint { get; private set; }
         public bool IsLocked { get; private set; }
+        public AudioClip FireSound => _fireSoundOverride != null
+            ? _fireSoundOverride
+            : So.fireSound;
+        public EffectId FireEffectId => So.fireEffectId;
 
         public CentralTransmitterRuntime(
             TransmitterSO so,
@@ -59,6 +65,20 @@ namespace Play
 
             IsLocked = false;
             ReplaceLockedModelWithNormalModel();
+        }
+
+        /// <summary>
+        /// 替换当前运行实例的发射音效；传入空值时恢复配置资产中的默认音效。
+        /// </summary>
+        /// <param name="clip">运行时音效覆盖；空值表示清除覆盖。</param>
+        public void SetFireSoundOverride(AudioClip clip)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _fireSoundOverride = clip;
         }
 
         /// <summary>

@@ -3,12 +3,15 @@ using System.Collections.Generic;
 namespace CombatSystem
 {
     /// <summary>
-    /// 从中央背包提取来源身份和有序技能，为每个物品实例创建或恢复独立卡牌状态。
+    /// 从中央背包提取来源身份、强度和有序技能，为每个物品实例创建或恢复独立卡牌状态。
     /// </summary>
     public sealed class CentralSkillLoadout
     {
         private readonly ItemCombatDefinitionResolver _definitionResolver;
         private readonly SkillHand _hand;
+        private float _energyCostMultiplier = 1f;
+
+        internal float EnergyCostMultiplier => _energyCostMultiplier;
 
         public SkillHand Hand => _hand;
 
@@ -21,12 +24,14 @@ namespace CombatSystem
         public void BeginRun()
         {
             _hand.Clear();
+            _energyCostMultiplier = 1f;
         }
 
-        /// <summary>按来源物品实例同步技能，保留仍存在技能的次数和冷却。</summary>
+        /// <summary>按来源物品实例同步技能和强度，保留仍存在技能的次数和冷却。</summary>
         public void ReplaceItems(IEnumerable<ItemVM> items)
         {
             var nextSkills = new List<SkillCardState>();
+            _energyCostMultiplier = 1f;
             if (items != null)
             {
                 foreach (ItemVM item in items)
@@ -34,6 +39,19 @@ namespace CombatSystem
                     if (item == null)
                     {
                         continue;
+                    }
+
+                    if (_definitionResolver.TryResolveCombatScope(
+                            item.Definition,
+                            out CombatScope scope) &&
+                        (scope == CombatScope.Central || scope == CombatScope.CentralAndTransmitter))
+                    {
+                        ItemCombatDefinitionSO combat = item.Definition.CombatDefinition;
+                        float itemMultiplier = combat != null
+                            ? combat.CentralEnergyCostMultiplier
+                            : 1f;
+                        float powerScale = Supply.ItemPowerTable.GetScale(item.PowerLevel);
+                        _energyCostMultiplier *= 1f + (itemMultiplier - 1f) * powerScale;
                     }
 
                     IReadOnlyList<SkillDefinitionSO> definitions =
@@ -46,13 +64,18 @@ namespace CombatSystem
                     SkillGrant grant = _definitionResolver.ResolveCentralSkillGrant(item.Definition);
 
                     SkillCardState existing = _hand.FindBySourceItemInstanceId(item.InstanceId);
-                    if (existing != null && existing.Matches(definitions, grant))
+                    if (existing != null && existing.Matches(definitions, grant, item.PowerLevel))
                     {
                         nextSkills.Add(existing);
                         continue;
                     }
 
-                    SkillCardState created = SkillCardState.Create(item.InstanceId, item.Definition, grant, definitions);
+                    SkillCardState created = SkillCardState.Create(
+                        item.InstanceId,
+                        item.Definition,
+                        grant,
+                        definitions,
+                        item.PowerLevel);
                     if (created != null)
                     {
                         nextSkills.Add(created);
@@ -66,6 +89,7 @@ namespace CombatSystem
         public void Clear()
         {
             _hand.Clear();
+            _energyCostMultiplier = 1f;
         }
     }
 }

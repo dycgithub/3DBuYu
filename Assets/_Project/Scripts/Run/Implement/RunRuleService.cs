@@ -18,6 +18,38 @@ namespace GameSystem
     /// </summary>
     public sealed class RunRuleService
     {
+        /// <summary>判断目标时长到达时是否应立即失败。</summary>
+        /// <param name="elapsedTime">本局已运行时间。</param>
+        /// <param name="targetDuration">目标时长。</param>
+        /// <param name="killCount">本局击杀数。</param>
+        /// <param name="targetKillCount">最低击杀数。</param>
+        /// <returns>达到时长但击杀不足时返回 true。</returns>
+        public bool ShouldFailAtTarget(
+            float elapsedTime,
+            float targetDuration,
+            int killCount,
+            int targetKillCount)
+        {
+            return RunRuleMath.HasReachedTargetDuration(elapsedTime, targetDuration) &&
+                   !RunRuleMath.HasRequiredKills(killCount, targetKillCount);
+        }
+
+        /// <summary>判断本局是否满足进入超时阶段的条件。</summary>
+        /// <param name="elapsedTime">本局已运行时间。</param>
+        /// <param name="targetDuration">目标时长。</param>
+        /// <param name="killCount">本局击杀数。</param>
+        /// <param name="targetKillCount">最低击杀数。</param>
+        /// <returns>达到时长且击杀达标时返回 true。</returns>
+        public bool ShouldEnterOvertime(
+            float elapsedTime,
+            float targetDuration,
+            int killCount,
+            int targetKillCount)
+        {
+            return RunRuleMath.HasReachedTargetDuration(elapsedTime, targetDuration) &&
+                   RunRuleMath.HasRequiredKills(killCount, targetKillCount);
+        }
+
         /// <summary>
         /// 根据能量耗尽时的本局进度判定胜负。
         /// </summary>

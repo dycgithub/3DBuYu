@@ -24,6 +24,7 @@ namespace Play
         private bool _initialized;
 
         [Inject] private ITransmitterAttackService _attackService;
+        [Inject] private ITransmitterGlobalEffectService _globalEffects;
         [Inject] private IInputService _input;
 
         /// <summary>绑定中央核心、端口集合和每个端口的发射点。</summary>
@@ -91,6 +92,12 @@ namespace Play
                 IDamageable target = _detector != null
                     ? _detector.GetTarget(portIndex)
                     : null;
+                IDamageable focusedTarget = _globalEffects?.GetFocusedTarget();
+                if (focusedTarget.IsAliveAndValid())
+                {
+                    target = focusedTarget;
+                }
+
                 bool autoRequested = autoFire && target.IsAliveAndValid();
                 if (!manualHeld && !autoRequested)
                 {
@@ -117,7 +124,10 @@ namespace Play
                     port.So.penetration,
                     port.So.criticalChance,
                     port.So.criticalDamage,
-                    port.PortId);
+                    port.PortId,
+                    port.FireSound,
+                    port.FireEffectId,
+                    firePoint);
 
                 _attackService?.TryExecuteAttack(in context);
             }

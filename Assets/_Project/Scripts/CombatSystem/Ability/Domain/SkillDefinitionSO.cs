@@ -19,7 +19,7 @@ namespace CombatSystem
         [SerializeField] private DamageType damageType = DamageType.Physical;
         [SerializeField] private SkillActionDefinitionSO actionDefinition;
 
-        /// <summary>获取技能的稳定标识。</summary>
+        /// <summary>获取技能标识。</summary>
         public string SkillIdentifier => skillIdentifier;
 
         /// <summary>获取技能造成的伤害量。</summary>

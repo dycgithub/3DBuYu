@@ -8,13 +8,15 @@ namespace GameSystem
     /// <summary>
     /// 管理单局能量状态。主动行为使用 TrySpend，不可避免的消耗使用 Drain 并将能量限制在零以上。
     /// </summary>
-    public sealed class EnergyService : IEnergyService, IEnergyActionScope, IDisposable
+    public sealed class EnergyService : IEnergyService, IEnergyCostService, IEnergyActionScope, IDisposable
     {
         private readonly ReactiveProperty<float> _currentEnergy = new();
+        private float _consumptionMultiplier = 1f;
 
         public ReadOnlyReactiveProperty<float> CurrentEnergy => _currentEnergy;
         public float MaximumEnergy { get; private set; }
         public bool IsDepleted => _currentEnergy.CurrentValue <= 0f;
+        public float ConsumptionMultiplier => _consumptionMultiplier;
 
         public event Action EnergyDepleted;
 
@@ -56,8 +58,24 @@ namespace GameSystem
         {
             MaximumEnergy = NormalizeNonNegative(maximumEnergy);
             _currentEnergy.Value = Mathf.Clamp(NormalizeNonNegative(initialEnergy), 0f, MaximumEnergy);
+            _consumptionMultiplier = 1f;
             _depletionNotified = false;
             NotifyIfDepleted();
+        }
+
+        /// <summary>设置本局所有能量消耗使用的倍率。</summary>
+        /// <param name="multiplier">正数消耗倍率。</param>
+        public void SetConsumptionMultiplier(float multiplier)
+        {
+            _consumptionMultiplier = IsPositiveFinite(multiplier) ? multiplier : 1f;
+        }
+
+        /// <summary>计算基础能量消耗在当前阶段的实际值。</summary>
+        /// <param name="baseAmount">未修正的基础消耗。</param>
+        /// <returns>应用当前倍率后的实际消耗。</returns>
+        public float GetEffectiveCost(float baseAmount)
+        {
+            return NormalizeNonNegative(NormalizeNonNegative(baseAmount) * _consumptionMultiplier);
         }
 
         /// <summary>
@@ -68,7 +86,7 @@ namespace GameSystem
         /// <returns>扣除成功或无需消耗时返回 true。</returns>
         public bool TrySpend(float baseAmount, EnergySpendKind kind)
         {
-            float cost = NormalizeNonNegative(baseAmount);
+            float cost = GetEffectiveCost(baseAmount);
             if (cost <= 0f)
             {
                 return true;
@@ -92,7 +110,7 @@ namespace GameSystem
         /// <returns>实际扣除的能量。</returns>
         public float Drain(float baseAmount, EnergySpendKind kind)
         {
-            float cost = NormalizeNonNegative(baseAmount);
+            float cost = GetEffectiveCost(baseAmount);
             if (cost <= 0f)
             {
                 return 0f;
@@ -176,6 +194,11 @@ namespace GameSystem
             }
 
             return Mathf.Max(0f, value);
+        }
+
+        private static bool IsPositiveFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value) && value > 0f;
         }
     }
 }

@@ -2,6 +2,7 @@ using Interfaces;
 using Services;
 using UnityEngine;
 using EffectSystem;
+using System.Collections.Generic;
 
 namespace CombatSystem
 {
@@ -15,7 +16,13 @@ namespace CombatSystem
         private readonly IEffectService _effectService;
         private readonly ISpatialQueryService _spatialQueryService;
         private readonly IDamageRequestProcessor _damageProcessor;
+        private readonly IBuffService _buffService;
+        private readonly IEnergyService _energyService;
+        private readonly HashSet<int> _refundedAttackIds = new();
+        private readonly Queue<int> _refundOrder = new();
         private PendingBeforeHit _pendingBeforeHit;
+
+        private const int RefundHistoryCapacity = 512;
 
         /// <summary>创建投射物效果分发器。</summary>
         /// <param name="effectService">负责播放默认和自定义视觉效果的服务。</param>
@@ -24,11 +31,15 @@ namespace CombatSystem
         public ProjectileEffectDispatcher(
             IEffectService effectService,
             ISpatialQueryService spatialQueryService = null,
-            IDamageRequestProcessor damageProcessor = null)
+            IDamageRequestProcessor damageProcessor = null,
+            IBuffService buffService = null,
+            IEnergyService energyService = null)
         {
             _effectService = effectService;
             _spatialQueryService = spatialQueryService;
             _damageProcessor = damageProcessor;
+            _buffService = buffService;
+            _energyService = energyService;
         }
 
         /// <summary>分发伤害成功后的命中效果。</summary>
@@ -60,6 +71,8 @@ namespace CombatSystem
             {
                 return;
             }
+
+            TryRefundEnergy(projectile, projectileProfile, result);
 
             if (pendingBeforeHit != null)
             {
@@ -183,8 +196,39 @@ namespace CombatSystem
                 DamageRequest = request,
                 DamageProcessor = _damageProcessor,
                 SpatialQueryService = _spatialQueryService,
-                ProjectileState = projectile
+                ProjectileState = projectile,
+                BuffService = _buffService
             };
+        }
+
+        /// <summary>按每次攻击最多一次的规则返还击杀能量。</summary>
+        private void TryRefundEnergy(
+            ProjectileRuntime projectile,
+            ProjectileProfileSO profile,
+            DamageResult result)
+        {
+            if (projectile == null || _energyService == null || !result.WasKilled ||
+                projectile.Data.AttackInstanceId <= 0 || profile.KillEnergyRefundRatio <= 0f ||
+                !_refundedAttackIds.Add(projectile.Data.AttackInstanceId))
+            {
+                return;
+            }
+
+            float baseCost = Mathf.Max(0f, projectile.Data.EnergyCost);
+            float paidCost = _energyService is IEnergyCostService costService
+                ? costService.GetEffectiveCost(baseCost)
+                : baseCost;
+            float refund = paidCost * Mathf.Clamp01(profile.KillEnergyRefundRatio);
+            if (refund > 0f)
+            {
+                _energyService.AddEnergy(refund);
+            }
+
+            _refundOrder.Enqueue(projectile.Data.AttackInstanceId);
+            while (_refundOrder.Count > RefundHistoryCapacity)
+            {
+                _refundedAttackIds.Remove(_refundOrder.Dequeue());
+            }
         }
 
         private sealed class PendingBeforeHit

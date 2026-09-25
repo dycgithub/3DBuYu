@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Interfaces;
 using Services;
+using Unity.Profiling;
 using UnityEngine;
 using VContainer;
 using VContainer.Unity;
@@ -11,6 +12,9 @@ namespace CombatSystem
     /// <summary>编排玩家整卡释放：检查、准备、消费、提交、更新状态；敌人直接使用执行器。</summary>
     public sealed class SkillActivationService : ITickable
     {
+        private static readonly ProfilerMarker TickMarker =
+            new("3DBuYu/VContainer/SkillActivationService.Tick");
+
         private readonly IEnergyService _energy;
         private readonly ICombatPhaseService _phase;
         private readonly IDamageRequestProcessor _damage;
@@ -19,6 +23,7 @@ namespace CombatSystem
         private readonly ICombatItemConsumptionService _items;
         private readonly ISkillExecutionService _executor;
         private readonly Play.CentralCore _caster;
+        private readonly CentralSkillLoadout _centralSkillLoadout;
         private bool _isExecuting;
 
         /// <summary>注入玩家规则和唯一技能执行入口；测试可省略场景施法者。</summary>
@@ -31,7 +36,8 @@ namespace CombatSystem
             SkillHand skillHand,
             ICombatItemConsumptionService itemConsumptionService,
             ISkillExecutionService skillExecutionService,
-            Play.CentralCore caster = null)
+            Play.CentralCore caster = null,
+            CentralSkillLoadout centralSkillLoadout = null)
         {
             _energy = energyService;
             _phase = phaseService;
@@ -41,6 +47,7 @@ namespace CombatSystem
             _items = itemConsumptionService;
             _executor = skillExecutionService ?? throw new ArgumentNullException(nameof(skillExecutionService));
             _caster = caster;
+            _centralSkillLoadout = centralSkillLoadout;
         }
 
         /// <summary>查询基础规则与目标存在性，不创建施法快照、不消费资源。</summary>
@@ -92,23 +99,26 @@ namespace CombatSystem
                 return Failure(reason, card);
             }
 
+            if (_energy != null && !_energy.TrySpend(
+                    GetItemAdjustedEnergyCost(card.EnergyCost),
+                    EnergySpendKind.Skill))
+            {
+                return Failure(SkillActivationFailureReason.InsufficientEnergy, card);
+            }
+
             var batch = new SkillDamageBatch(card.SourceItemInstanceId);
             reason = Prepare(card, batch);
             if (reason != SkillActivationFailureReason.None || (batch.Count > 0 && _damage == null))
             {
+                _energy?.AddEnergy(GetEffectiveEnergyCost(card.EnergyCost));
                 return Failure(reason != SkillActivationFailureReason.None
                     ? reason : SkillActivationFailureReason.ActionFailed, card);
-            }
-
-            if (_energy != null && !_energy.TrySpend(card.EnergyCost, EnergySpendKind.Skill))
-            {
-                return Failure(SkillActivationFailureReason.InsufficientEnergy, card);
             }
 
             bool consumesItem = card.RemainingUses == 1;
             if (consumesItem && !_items.TryConsumeItemInstance(card.SourceItemInstanceId))
             {
-                _energy?.AddEnergy(card.EnergyCost);
+                _energy?.AddEnergy(GetEffectiveEnergyCost(card.EnergyCost));
                 return Failure(SkillActivationFailureReason.SourceConsumptionFailed, card);
             }
 
@@ -135,7 +145,7 @@ namespace CombatSystem
             };
         }
 
-        /// <summary>先固定全部目标，再调用动作收集伤害；任何动作失败都不提交批次。</summary>
+        /// <summary>先固定全部目标和物品强度，再调用动作收集伤害；任何动作失败都不提交批次。</summary>
         private SkillActivationFailureReason Prepare(SkillCardState card, SkillDamageBatch batch)
         {
             Vector3 origin = CasterPosition();
@@ -146,7 +156,13 @@ namespace CombatSystem
                 {
                     return reason;
                 }
-                requests.Add(new SkillExecutionRequest(definition, card.SourceItemInstanceId, origin, targets, batch));
+                requests.Add(new SkillExecutionRequest(
+                    definition,
+                    card.SourceItemInstanceId,
+                    origin,
+                    targets,
+                    batch,
+                    card.PowerLevel));
             }
 
             foreach (SkillExecutionRequest request in requests)
@@ -194,11 +210,30 @@ namespace CombatSystem
                     return SkillActivationFailureReason.SkillNotFound;
                 }
             }
-            if (_energy != null && _energy.CurrentEnergy.CurrentValue < card.EnergyCost)
+            if (_energy != null && _energy.CurrentEnergy.CurrentValue < GetEffectiveEnergyCost(card.EnergyCost))
             {
                 return SkillActivationFailureReason.InsufficientEnergy;
             }
             return SkillActivationFailureReason.None;
+        }
+
+        /// <summary>将技能基础消耗换算为当前阶段的实际消耗。</summary>
+        /// <param name="baseAmount">技能配置中的基础消耗。</param>
+        /// <returns>应用当前能量倍率后的消耗。</returns>
+        private float GetEffectiveEnergyCost(float baseAmount)
+        {
+            float itemAdjustedCost = GetItemAdjustedEnergyCost(baseAmount);
+            return _energy is IEnergyCostService energyCostService
+                ? energyCostService.GetEffectiveCost(itemAdjustedCost)
+                : itemAdjustedCost;
+        }
+
+        /// <summary>应用中央背包的节能道具倍率，不重复应用本局通用消耗倍率。</summary>
+        private float GetItemAdjustedEnergyCost(float baseAmount)
+        {
+            return baseAmount * Mathf.Max(
+                0f,
+                _centralSkillLoadout?.EnergyCostMultiplier ?? 1f);
         }
 
         /// <summary>读取本次施法中心；无场景施法者的测试使用原点。</summary>
@@ -208,7 +243,11 @@ namespace CombatSystem
         public void AdvanceCooldown(float deltaTime) => _hand?.AdvanceCooldowns(deltaTime);
 
         /// <summary>使用游戏时间推进冷却，暂停时停止。</summary>
-        public void Tick() => AdvanceCooldown(Time.deltaTime);
+        public void Tick()
+        {
+            using var profilerScope = TickMarker.Auto();
+            AdvanceCooldown(Time.deltaTime);
+        }
 
         /// <summary>返回失败原因和未经本次消费修改的卡牌状态。</summary>
         private static SkillActivationResult Failure(SkillActivationFailureReason reason, SkillCardState card)

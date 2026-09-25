@@ -18,7 +18,7 @@ namespace CombatSystem
             return Execute(in context, targets, damageProcessor, out appliedTargetCount);
         }
 
-        /// <summary>执行默认伤害动作，供没有自定义动作资产的技能使用。</summary>
+        /// <summary>执行默认伤害动作，供没有自定义动作资产的技能使用，并应用物品效果倍率。</summary>
         public static bool Execute(
             in SkillExecutionContext context,
             IReadOnlyList<IDamageable> targets,
@@ -33,7 +33,7 @@ namespace CombatSystem
                 out appliedTargetCount);
         }
 
-        /// <summary>按指定伤害量执行默认伤害动作，供固定伤害的中央动作使用。</summary>
+        /// <summary>按指定伤害量和物品效果倍率执行默认伤害动作。</summary>
         internal static bool Execute(
             in SkillExecutionContext context,
             IReadOnlyList<IDamageable> targets,
@@ -59,7 +59,7 @@ namespace CombatSystem
                 {
                     AttackInstanceId = context.AttackInstanceId,
                     SourceInstanceId = context.SourceInstanceId,
-                    DamageAmount = Mathf.Max(0f, damageAmount),
+                    DamageAmount = Mathf.Max(0f, damageAmount) * context.EffectScale,
                     DamageType = context.Definition.DamageType,
                     HitPosition = target.Position,
                     HitNormal = target.Position.sqrMagnitude > 0f

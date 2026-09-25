@@ -7,29 +7,19 @@ namespace CameraSystem
 {
     /// <summary>
     /// 管理固定在外层球面上的区域摄像机。
-    /// <para>使用玩家球面法线与区域方向的夹角选择摄像机，并通过滞回避免边界抖动。</para>
+    /// <para>本类只负责区域选择和位置计算，可调参数由 SphericalCameraDirector 统一注入。</para>
     /// </summary>
     [DefaultExecutionOrder(-40)]
     public sealed class SphericalCameraRegional : MonoBehaviour
     {
         private const float MinimumDirectionSqrMagnitude = 0.000001f;
-        private const float MinimumRadiusMultiplier = 1.01f;
-        private const float MinimumFieldOfView = 1f;
-        private const float MaximumFieldOfView = 179f;
-        private const float DefaultFieldOfView = 61f;
         private const float MaximumCoverageRadius = 89f;
         private const float MinimumCoverageCandidateSqrMagnitude = 0.000001f;
 
-        [Header("区域摄像机")]
-        [SerializeField] private SphereWalker _walker;
-        [SerializeField] private CinemachineVirtualCamera[] _regionCameras;
-
-        [Header("球面布局")]
-        [SerializeField, Min(0f)] private float _switchHysteresisDegrees = 4f;
-        [SerializeField, Min(MinimumFieldOfView)] private float _baseFieldOfView = DefaultFieldOfView;
-        [SerializeField, Range(0f, MaximumCoverageRadius)] private float _coverageRadiusDegrees;
-
+        private SphereWalker _walker;
+        private CinemachineVirtualCamera[] _regionCameras = Array.Empty<CinemachineVirtualCamera>();
         private Vector3[] _regionDirections = Array.Empty<Vector3>();
+        private float _calculatedCoverageRadiusDegrees;
         private int _currentRegionIndex = -1;
         private bool _initialized;
         private bool _active;
@@ -44,13 +34,25 @@ namespace CameraSystem
         public CinemachineVirtualCamera ActiveCamera
             => IsValidIndex(_currentRegionIndex) ? _regionCameras[_currentRegionIndex] : null;
 
-        /// <summary>初始化区域方向和摄像机配置。</summary>
+        /// <summary>初始化区域方向和摄像机引用。</summary>
         public void Initialize(SphereWalker walker)
         {
-            if (walker != null)
-                _walker = walker;
+            Initialize(walker, FindRegionCameras());
+        }
 
-            int cameraCount = _regionCameras != null ? _regionCameras.Length : 0;
+        /// <summary>使用 Director 提供的区域摄像机引用初始化本模式。</summary>
+        public void Initialize(SphereWalker walker, CinemachineVirtualCamera[] regionCameras)
+        {
+            _walker = walker;
+            CinemachineVirtualCamera[] configuredCameras = FilterValidCameras(regionCameras);
+            if (configuredCameras.Length == 0)
+            {
+                configuredCameras = FilterValidCameras(FindRegionCameras());
+            }
+
+            _regionCameras = configuredCameras;
+
+            int cameraCount = _regionCameras.Length;
             _regionDirections = new Vector3[cameraCount];
             for (int i = 0; i < cameraCount; i++)
             {
@@ -62,7 +64,6 @@ namespace CameraSystem
                 regionCamera.Follow = null;
                 regionCamera.LookAt = null;
                 EnsureImpulseListener(regionCamera);
-                SetCameraFieldOfView(regionCamera, _baseFieldOfView);
             }
 
             if (!HasConfiguredDirections(_regionDirections))
@@ -70,7 +71,7 @@ namespace CameraSystem
                 _regionDirections = BuildRegionDirections(cameraCount);
             }
 
-            _coverageRadiusDegrees = Mathf.Min(
+            _calculatedCoverageRadiusDegrees = Mathf.Min(
                 MaximumCoverageRadius,
                 CalculateCoverageRadius(_regionDirections));
 
@@ -89,13 +90,17 @@ namespace CameraSystem
         }
 
         /// <summary>由 Director 在 LateUpdate 中更新位置和区域选择。</summary>
-        public void Tick(float deltaTime)
+        public void Tick(
+            float deltaTime,
+            float baseFieldOfView,
+            float switchHysteresisDegrees,
+            float coverageRadiusDegrees)
         {
             if (!_initialized || _walker == null)
                 return;
 
             Vector3 center = _walker.GetEffectiveCenter();
-            PositionCameras(center);
+            PositionCameras(center, baseFieldOfView, coverageRadiusDegrees);
 
             if (!_active)
                 return;
@@ -108,27 +113,19 @@ namespace CameraSystem
                 playerOffset.normalized,
                 _regionDirections,
                 _currentRegionIndex,
-                _switchHysteresisDegrees);
-        }
-
-        /// <summary>设置所有区域摄像机的基础 FOV。</summary>
-        public void SetBaseFieldOfView(float fieldOfView)
-        {
-            _baseFieldOfView = NormalizeFieldOfView(fieldOfView);
-            SetFieldOfView(_baseFieldOfView);
+                switchHysteresisDegrees);
         }
 
         /// <summary>设置所有区域摄像机的运行时 FOV。</summary>
         public void SetFieldOfView(float fieldOfView)
         {
-            float normalizedFieldOfView = NormalizeFieldOfView(fieldOfView);
-            if (_regionCameras == null)
+            if (!IsFinite(fieldOfView))
                 return;
 
             for (int i = 0; i < _regionCameras.Length; i++)
             {
                 if (_regionCameras[i] != null)
-                    SetCameraFieldOfView(_regionCameras[i], normalizedFieldOfView);
+                    SetCameraFieldOfView(_regionCameras[i], fieldOfView);
             }
         }
 
@@ -336,6 +333,41 @@ namespace CameraSystem
                 : currentIndex;
         }
 
+        private CinemachineVirtualCamera[] FindRegionCameras()
+        {
+            CinemachineVirtualCamera[] candidates =
+                GetComponentsInChildren<CinemachineVirtualCamera>(true);
+            List<CinemachineVirtualCamera> regionCameras = new(candidates.Length);
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                if (candidates[i].GetComponent<SphericalCameraFollow>() == null)
+                    regionCameras.Add(candidates[i]);
+            }
+
+            return regionCameras.ToArray();
+        }
+
+        private static CinemachineVirtualCamera[] FilterValidCameras(
+            CinemachineVirtualCamera[] cameras)
+        {
+            if (cameras == null || cameras.Length == 0)
+            {
+                return Array.Empty<CinemachineVirtualCamera>();
+            }
+
+            List<CinemachineVirtualCamera> validCameras = new(cameras.Length);
+            for (int i = 0; i < cameras.Length; i++)
+            {
+                if (cameras[i] != null &&
+                    cameras[i].GetComponent<SphericalCameraFollow>() == null)
+                {
+                    validCameras.Add(cameras[i]);
+                }
+            }
+
+            return validCameras.ToArray();
+        }
+
         private Vector3 GetRegionDirection(CinemachineVirtualCamera regionCamera)
         {
             Vector3 center = _walker != null ? _walker.GetEffectiveCenter() : Vector3.zero;
@@ -349,13 +381,19 @@ namespace CameraSystem
                 : Vector3.forward;
         }
 
-        private void PositionCameras(Vector3 center)
+        private void PositionCameras(
+            Vector3 center,
+            float baseFieldOfView,
+            float coverageRadiusDegrees)
         {
             float playerRadius = Mathf.Max(0.01f, _walker.radius);
+            float effectiveCoverage = coverageRadiusDegrees > 0f
+                ? coverageRadiusDegrees
+                : _calculatedCoverageRadiusDegrees;
             float radius = CalculateCameraDistance(
                 playerRadius,
-                _baseFieldOfView * 0.5f,
-                _coverageRadiusDegrees);
+                baseFieldOfView * 0.5f,
+                effectiveCoverage);
             for (int i = 0; i < _regionCameras.Length; i++)
             {
                 CinemachineVirtualCamera regionCamera = _regionCameras[i];
@@ -393,13 +431,6 @@ namespace CameraSystem
         {
             if (camera.GetComponent<CinemachineImpulseListener>() == null)
                 camera.gameObject.AddComponent<CinemachineImpulseListener>();
-        }
-
-        private void OnValidate()
-        {
-            _switchHysteresisDegrees = NormalizeNonNegative(_switchHysteresisDegrees);
-            _baseFieldOfView = NormalizeFieldOfView(_baseFieldOfView);
-            _coverageRadiusDegrees = Mathf.Clamp(_coverageRadiusDegrees, 0f, MaximumCoverageRadius);
         }
 
         private static bool HasConfiguredDirections(Vector3[] directions)
@@ -459,18 +490,6 @@ namespace CameraSystem
             Vector3 normalized = candidate.normalized;
             candidates.Add(normalized);
             candidates.Add(-normalized);
-        }
-
-        private static float NormalizeFieldOfView(float value)
-        {
-            return IsFinite(value)
-                ? Mathf.Clamp(value, MinimumFieldOfView, MaximumFieldOfView)
-                : DefaultFieldOfView;
-        }
-
-        private static float NormalizeNonNegative(float value)
-        {
-            return IsFinite(value) ? Mathf.Max(0f, value) : 0f;
         }
 
         private static bool IsFinite(float value)

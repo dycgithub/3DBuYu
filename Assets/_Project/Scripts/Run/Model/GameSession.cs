@@ -1,3 +1,5 @@
+using System;
+
 namespace GameSystem
 {
     /// <summary>
@@ -11,6 +13,12 @@ namespace GameSystem
         /// <summary>当前等待结算的本局积分。</summary>
         public int PendingPoints => SessionPoints;
 
+        /// <summary>目标时长前获得的本局积分。</summary>
+        public int BasePoints { get; private set; }
+
+        /// <summary>超时阶段获得的本局积分。</summary>
+        public int OvertimePoints { get; private set; }
+
         /// <summary>本局击杀数。</summary>
         public int KillCount { get; private set; }
 
@@ -23,6 +31,12 @@ namespace GameSystem
         /// <summary>本局使用的随机种子。</summary>
         public int RandomSeed { get; private set; }
 
+        /// <summary>本局是否已经进入超时阶段。</summary>
+        public bool IsOvertime { get; private set; }
+
+        /// <summary>进入超时阶段后经过的时间，单位为秒。</summary>
+        public float OvertimeElapsedTime { get; private set; }
+
         /// <summary>
         /// 创建一个处于初始状态的游戏会话。
         /// </summary>
@@ -34,10 +48,14 @@ namespace GameSystem
         public void Reset()
         {
             SessionPoints = 0;
+            BasePoints = 0;
+            OvertimePoints = 0;
             KillCount = 0;
             ElapsedTime = 0f;
             DifficultyId = string.Empty;
             RandomSeed = 0;
+            IsOvertime = false;
+            OvertimeElapsedTime = 0f;
         }
 
         /// <summary>
@@ -70,7 +88,29 @@ namespace GameSystem
             if (deltaTime > 0f && !float.IsNaN(deltaTime) && !float.IsInfinity(deltaTime))
             {
                 ElapsedTime += deltaTime;
+
+                if (IsOvertime)
+                {
+                    OvertimeElapsedTime += deltaTime;
+                }
             }
+        }
+
+        /// <summary>
+        /// 进入超时阶段并记录已经超过目标时长的部分。
+        /// </summary>
+        /// <param name="overtimeElapsedTime">进入阶段时已经经过的超时时间。</param>
+        public void EnterOvertime(float overtimeElapsedTime)
+        {
+            if (IsOvertime)
+            {
+                return;
+            }
+
+            IsOvertime = true;
+            OvertimeElapsedTime = IsFinite(overtimeElapsedTime)
+                ? Math.Max(0f, overtimeElapsedTime)
+                : 0f;
         }
 
         /// <summary>
@@ -91,7 +131,21 @@ namespace GameSystem
             if (amount > 0)
             {
                 SessionPoints += amount;
+
+                if (IsOvertime)
+                {
+                    OvertimePoints += amount;
+                }
+                else
+                {
+                    BasePoints += amount;
+                }
             }
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
     }
 }

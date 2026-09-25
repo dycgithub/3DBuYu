@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace Utils
 {
@@ -89,6 +90,12 @@ namespace Utils
         private readonly Dictionary<int, Entry> _entriesByInstanceId = new();
         private readonly HashSet<int> _rentedInstanceIds = new();
 
+        /// <summary>订阅场景卸载事件，及时移除被 Unity 自动销毁的池实例。</summary>
+        public GameObjectPoolService()
+        {
+            SceneManager.sceneUnloaded += HandleSceneUnloaded;
+        }
+
         public GameObject Rent(
             GameObject prefab,
             PoolSettings settings,
@@ -100,6 +107,7 @@ namespace Utils
                 return null;
 
             Bucket bucket = GetOrCreateBucket(prefab, settings, factory);
+            RemoveDestroyedEntries(bucket);
             Entry entry = TakeAvailable(bucket) ?? CreateEntry(bucket);
             if (entry == null || entry.Instance == null)
                 return null;
@@ -116,11 +124,20 @@ namespace Utils
 
         public bool Return(GameObject instance)
         {
-            if (instance == null)
+            if (ReferenceEquals(instance, null))
+            {
                 return false;
+            }
+
+            if (instance == null)
+            {
+                RemoveDestroyedEntries();
+                return false;
+            }
 
             int instanceId = instance.GetInstanceID();
             if (!_entriesByInstanceId.TryGetValue(instanceId, out Entry entry) ||
+                !ReferenceEquals(entry.Instance, instance) ||
                 !_rentedInstanceIds.Remove(instanceId))
             {
                 return false;
@@ -163,6 +180,7 @@ namespace Utils
             }
 
             Bucket bucket = GetOrCreateBucket(prefab, settings, factory);
+            RemoveDestroyedEntries(bucket);
             int targetCount = Mathf.Min(count, bucket.Settings.MaximumRetained);
             while (bucket.Available.Count < targetCount)
             {
@@ -179,46 +197,34 @@ namespace Utils
             if (prefab == null || !_buckets.TryGetValue(prefab, out Bucket bucket))
                 return default;
 
+            RemoveDestroyedEntries(bucket);
             return new PoolUsage(bucket.Entries.Count, bucket.Available.Count, bucket.RentedCount);
         }
 
         public void Clear(GameObject prefab)
         {
-            if (prefab == null || !_buckets.Remove(prefab, out Bucket bucket))
+            if (ReferenceEquals(prefab, null) || !_buckets.Remove(prefab, out Bucket bucket))
                 return;
 
-            var entries = new List<Entry>(bucket.Entries.Values);
-            for (int i = 0; i < entries.Count; i++)
-            {
-                Entry entry = entries[i];
-                _entriesByInstanceId.Remove(entry.InstanceId);
-                _rentedInstanceIds.Remove(entry.InstanceId);
-                if (entry.Instance != null)
-                {
-#if UNITY_EDITOR
-                    if (!Application.isPlaying)
-                        UnityEngine.Object.DestroyImmediate(entry.Instance);
-                    else
-#endif
-                        UnityEngine.Object.Destroy(entry.Instance);
-                }
-            }
-
-            bucket.Available.Clear();
-            bucket.Entries.Clear();
+            ClearBucket(bucket);
         }
 
         public void ClearAll()
         {
-            var prefabs = new List<GameObject>(_buckets.Keys);
-            for (int i = 0; i < prefabs.Count; i++)
-                Clear(prefabs[i]);
+            var buckets = new List<Bucket>(_buckets.Values);
+            for (int i = 0; i < buckets.Count; i++)
+            {
+                ClearBucket(buckets[i]);
+            }
 
+            _buckets.Clear();
+            _entriesByInstanceId.Clear();
             _rentedInstanceIds.Clear();
         }
 
         public void Dispose()
         {
+            SceneManager.sceneUnloaded -= HandleSceneUnloaded;
             ClearAll();
         }
 
@@ -302,6 +308,17 @@ namespace Utils
 
             instance.SetActive(false);
             int instanceId = instance.GetInstanceID();
+            if (_entriesByInstanceId.TryGetValue(instanceId, out Entry existingEntry))
+            {
+                if (existingEntry.Instance != null)
+                {
+                    DestroyInstance(instance);
+                    return null;
+                }
+
+                RemoveEntry(existingEntry);
+            }
+
             var entry = new Entry
             {
                 InstanceId = instanceId,
@@ -320,9 +337,89 @@ namespace Utils
             if (entry == null)
                 return;
 
+            if (_rentedInstanceIds.Remove(entry.InstanceId))
+            {
+                entry.Bucket.RentedCount = Mathf.Max(0, entry.Bucket.RentedCount - 1);
+            }
+
             _entriesByInstanceId.Remove(entry.InstanceId);
-            _rentedInstanceIds.Remove(entry.InstanceId);
             entry.Bucket.Entries.Remove(entry.InstanceId);
+        }
+
+        private void RemoveDestroyedEntries()
+        {
+            var buckets = new List<Bucket>(_buckets.Values);
+            for (int i = 0; i < buckets.Count; i++)
+            {
+                RemoveDestroyedEntries(buckets[i]);
+            }
+        }
+
+        private void RemoveDestroyedEntries(Bucket bucket)
+        {
+            var availableEntries = new List<Entry>(bucket.Available.Count);
+            while (bucket.Available.Count > 0)
+            {
+                Entry entry = bucket.Available.Pop();
+                if (entry.Instance != null)
+                {
+                    availableEntries.Add(entry);
+                }
+                else
+                {
+                    RemoveEntry(entry);
+                }
+            }
+
+            for (int i = availableEntries.Count - 1; i >= 0; i--)
+            {
+                bucket.Available.Push(availableEntries[i]);
+            }
+
+            var entries = new List<Entry>(bucket.Entries.Values);
+            for (int i = 0; i < entries.Count; i++)
+            {
+                if (entries[i].Instance == null)
+                {
+                    RemoveEntry(entries[i]);
+                }
+            }
+        }
+
+        private void ClearBucket(Bucket bucket)
+        {
+            var entries = new List<Entry>(bucket.Entries.Values);
+            for (int i = 0; i < entries.Count; i++)
+            {
+                Entry entry = entries[i];
+                _entriesByInstanceId.Remove(entry.InstanceId);
+                _rentedInstanceIds.Remove(entry.InstanceId);
+                if (entry.Instance != null)
+                {
+                    DestroyInstance(entry.Instance);
+                }
+            }
+
+            bucket.Available.Clear();
+            bucket.Entries.Clear();
+            bucket.RentedCount = 0;
+        }
+
+        private void HandleSceneUnloaded(Scene _)
+        {
+            RemoveDestroyedEntries();
+        }
+
+        private static void DestroyInstance(GameObject instance)
+        {
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                UnityEngine.Object.DestroyImmediate(instance);
+                return;
+            }
+#endif
+            UnityEngine.Object.Destroy(instance);
         }
 
         private static IPooledObject[] FindLifecycleCallbacks(GameObject instance)
@@ -343,8 +440,10 @@ namespace Utils
             for (int i = 0; i < entry.LifecycleCallbacks.Length; i++)
             {
                 IPooledObject callback = entry.LifecycleCallbacks[i];
-                if (callback != null)
+                if (callback is MonoBehaviour behaviour && behaviour != null)
+                {
                     callback.OnRentFromPool();
+                }
             }
         }
 
@@ -353,8 +452,10 @@ namespace Utils
             for (int i = 0; i < entry.LifecycleCallbacks.Length; i++)
             {
                 IPooledObject callback = entry.LifecycleCallbacks[i];
-                if (callback != null)
+                if (callback is MonoBehaviour behaviour && behaviour != null)
+                {
                     callback.OnReturnToPool();
+                }
             }
         }
     }

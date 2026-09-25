@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Interfaces;
 using Services;
-using SpatialSystem.Bridge;
+using SpatialIndexing;
 using UnityEngine;
 
 namespace CombatSystem
@@ -28,7 +28,7 @@ namespace CombatSystem
                 return true;
             }
 
-            List<IDamageable> candidates = _spatial?.QueryAll(SpatialRegistry.LAYER_ENEMY);
+            List<IDamageable> candidates = _spatial?.QueryAll(SpatialLayers.Enemy);
             if (candidates != null)
             {
                 foreach (IDamageable target in candidates)
@@ -56,7 +56,7 @@ namespace CombatSystem
             }
 
             bool nearestOnly = definition.TargetSelectionMode == SkillTargetSelectionMode.NearestEnemy;
-            List<IDamageable> candidates = _spatial?.QueryAll(SpatialRegistry.LAYER_ENEMY);
+            List<IDamageable> candidates = _spatial?.QueryAll(SpatialLayers.Enemy);
             var result = new List<IDamageable>();
             HashSet<IDamageable> unique = nearestOnly ? null : new HashSet<IDamageable>();
             IDamageable nearest = null;

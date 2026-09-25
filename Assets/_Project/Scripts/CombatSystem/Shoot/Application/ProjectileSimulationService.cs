@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Interfaces;
 using Services;
+using Unity.Profiling;
 using UnityEngine;
 using VContainer.Unity;
 
@@ -12,13 +13,24 @@ namespace CombatSystem
     /// </summary>
     public sealed class ProjectileSimulationService : ITickable, IDisposable, IProjectileHitEventSource
     {
+        private const float EmissionTimeEpsilon = 0.000001f;
+        private static readonly ProfilerMarker TickMarker =
+            new("3DBuYu/VContainer/ProjectileSimulationService.Tick");
+        private static readonly ProfilerMarker SimulateStepMarker =
+            new("3DBuYu/ProjectileSimulationService.SimulateStep");
+        private static readonly ProfilerMarker PublishSpatialSnapshotMarker =
+            new("3DBuYu/ProjectileSimulationService.PublishSpatialSnapshot");
+
         private readonly ProjectileViewPool _viewPool;
         private readonly ProjectileRuntimePool _runtimePool;
         private readonly IProjectileCollisionQuery _collisionQuery;
-        private readonly IDamageRequestProcessor _damageProcessor;
-        private readonly IProjectileEffectDispatcher _effectDispatcher;
+        private readonly ProjectileHitResolver _hitResolver;
         private readonly ISpatialQueryService _spatialQueryService;
+        // 快照发布与查询服务共用同一实例，不再为内部能力单独占用容器接口绑定。
+        private readonly IProjectileSnapshotPublisher _projectileSnapshotPublisher;
         private readonly List<ProjectileRuntime> _activeProjectiles = new();
+        private readonly List<ProjectileRuntime> _pendingProjectiles = new();
+        private readonly List<PendingProjectileEmission> _pendingEmissions = new();
         private readonly List<ProjectileCollision> _collisionResults = new();
         private int _nextProjectileInstanceId;
 
@@ -34,7 +46,7 @@ namespace CombatSystem
         /// <param name="collisionQuery">查询投射物路径碰撞的服务。</param>
         /// <param name="damageProcessor">提交统一伤害请求的处理器。</param>
         /// <param name="effectDispatcher">分发投射物生命周期效果的服务。</param>
-        /// <param name="spatialQueryService">为追踪轨迹提供目标查询的服务。</param>
+        /// <param name="spatialQueryService">提供目标查询并可接收活动投射物空间快照的服务。</param>
         public ProjectileSimulationService(
             ProjectileViewPool viewPool,
             ProjectileRuntimePool runtimePool,
@@ -46,9 +58,14 @@ namespace CombatSystem
             _viewPool = viewPool;
             _runtimePool = runtimePool;
             _collisionQuery = collisionQuery;
-            _damageProcessor = damageProcessor;
-            _effectDispatcher = effectDispatcher;
             _spatialQueryService = spatialQueryService;
+            _projectileSnapshotPublisher = spatialQueryService as IProjectileSnapshotPublisher;
+            _hitResolver = new ProjectileHitResolver(
+                damageProcessor,
+                effectDispatcher,
+                spatialQueryService,
+                QueueSplitProjectile,
+                context => HitProcessed?.Invoke(context));
         }
 
         /// <summary>尝试生成一个投射物。</summary>
@@ -57,7 +74,7 @@ namespace CombatSystem
         public bool TrySpawnProjectile(in ProjectileData projectileData) =>
             TrySpawnProjectileBatch(in projectileData, 1);
 
-        /// <summary>尝试生成指定数量的投射物。</summary>
+        /// <summary>按配置生成一批投射物，并为批次应用对称散射。</summary>
         /// <param name="projectileData">每个投射物使用的数据模板。</param>
         /// <param name="projectileCount">要生成的数量。</param>
         /// <returns>生成请求被接受时返回 <c>true</c>。</returns>
@@ -70,16 +87,131 @@ namespace CombatSystem
                 return false;
             }
 
-            for (int i = 0; i < projectileCount; i++)
+            ProjectileProfileSO profile = projectileData.ProjectileProfile;
+            int resolvedCount = profile.EmitProjectilesSequentially &&
+                profile.SequentialProjectileCount > 0
+                ? profile.SequentialProjectileCount
+                : projectileCount;
+            if (profile.EmitProjectilesSequentially && resolvedCount > 1 &&
+                projectileData.AttacksPerSecond > 0f)
             {
-                SpawnSingleProjectile(in projectileData);
+                return TryScheduleProjectileBatch(in projectileData, resolvedCount);
             }
+
+            float scatterAngle = profile.ScatterAngleDegrees;
+            for (int index = 0; index < resolvedCount; index++)
+            {
+                ProjectileData launchData = CreateLaunchData(
+                    in projectileData,
+                    resolvedCount,
+                    index,
+                    scatterAngle);
+                ProjectileRuntime projectile = SpawnSingleProjectile(in launchData);
+                if (projectile != null)
+                {
+                    _activeProjectiles.Add(projectile);
+                }
+            }
+            PublishSpatialSnapshot();
             return true;
         }
 
-        /// <summary>规范化方向，并创建即时或持续模拟的单个投射物。</summary>
+        /// <summary>立即发射第一颗，并把余下投射物均匀排入一个攻击间隔。</summary>
+        private bool TryScheduleProjectileBatch(in ProjectileData projectileData, int projectileCount)
+        {
+            ProjectileProfileSO profileSnapshot = CreateProfileSnapshot(projectileData.ProjectileProfile);
+            if (profileSnapshot == null)
+            {
+                return false;
+            }
+
+            ProjectileData template = projectileData;
+            template.ProjectileProfile = profileSnapshot;
+            ProjectileData firstData = template;
+            firstData.LaunchDirection = ProjectileLaunchPattern.GetRandomDirection(
+                projectileData.LaunchDirection,
+                profileSnapshot.RandomDirectionAngleDegrees);
+            ProjectileRuntime firstProjectile = SpawnSingleProjectile(in firstData);
+            if (firstProjectile == null)
+            {
+                DestroyProfileSnapshot(profileSnapshot);
+                return false;
+            }
+
+            _activeProjectiles.Add(firstProjectile);
+            float attackInterval = 1f / Mathf.Max(0.001f, projectileData.AttacksPerSecond);
+            _pendingEmissions.Add(new PendingProjectileEmission(
+                template,
+                profileSnapshot,
+                projectileCount,
+                attackInterval / (projectileCount - 1)));
+            PublishSpatialSnapshot();
+            return true;
+        }
+
+        /// <summary>推进各攻击批次的后续投射物。</summary>
+        private void AdvancePendingEmissions(float deltaTime)
+        {
+            for (int index = _pendingEmissions.Count - 1; index >= 0; index--)
+            {
+                PendingProjectileEmission emission = _pendingEmissions[index];
+                emission.SecondsUntilNextShot -= deltaTime;
+                while (emission.SecondsUntilNextShot <= EmissionTimeEpsilon &&
+                    emission.NextProjectileIndex < emission.ProjectileCount)
+                {
+                    ProjectileData launchData = emission.Template;
+                    launchData.LaunchDirection = ProjectileLaunchPattern.GetRandomDirection(
+                        emission.Template.LaunchDirection,
+                        emission.ProfileSnapshot.RandomDirectionAngleDegrees);
+                    ProjectileRuntime projectile = SpawnSingleProjectile(in launchData);
+                    if (projectile != null)
+                    {
+                        _activeProjectiles.Add(projectile);
+                    }
+
+                    emission.NextProjectileIndex++;
+                    emission.SecondsUntilNextShot += emission.SecondsBetweenShots;
+                }
+
+                if (emission.NextProjectileIndex >= emission.ProjectileCount)
+                {
+                    DestroyProfileSnapshot(emission.ProfileSnapshot);
+                    _pendingEmissions.RemoveAt(index);
+                }
+                else
+                {
+                    _pendingEmissions[index] = emission;
+                }
+            }
+        }
+
+        /// <summary>复制投射物模板并按批次配置确定单发方向。</summary>
+        private static ProjectileData CreateLaunchData(
+            in ProjectileData projectileData,
+            int projectileCount,
+            int projectileIndex,
+            float scatterAngle)
+        {
+            ProjectileData launchData = projectileData;
+            launchData.LaunchDirection = ProjectileLaunchPattern.GetDirection(
+                projectileData.LaunchDirection,
+                projectileCount,
+                projectileIndex,
+                scatterAngle);
+            if (projectileData.ProjectileProfile.RandomDirectionAngleDegrees > 0f)
+            {
+                launchData.LaunchDirection = ProjectileLaunchPattern.GetRandomDirection(
+                    launchData.LaunchDirection,
+                    projectileData.ProjectileProfile.RandomDirectionAngleDegrees);
+            }
+
+            return launchData;
+        }
+
+        /// <summary>规范化单发数据、只应用一次速度变化，并初始化指定追踪目标。</summary>
         /// <param name="projectileData">待生成的投射物数据模板。</param>
-        private void SpawnSingleProjectile(in ProjectileData projectileData)
+        /// <param name='trackingTarget'>分裂子弹选中的追踪目标；普通子弹不指定。</param>
+        private ProjectileRuntime SpawnSingleProjectile(in ProjectileData projectileData, IDamageable trackingTarget = null)
         {
             Vector3 launchDirection = projectileData.LaunchDirection.sqrMagnitude > 0.0001f
                 ? projectileData.LaunchDirection.normalized
@@ -97,16 +229,32 @@ namespace CombatSystem
             {
                 ResolveHitscanProjectile(normalizedData);
                 DestroyProfileSnapshot(profile);
-                return;
+                return null;
             }
 
             if (normalizedData.MaximumTravelDistance <= 0f)
             {
-                _effectDispatcher?.DispatchExpiredEffects(
+                _hitResolver.DispatchExpiredEffects(
                     profile,
                     normalizedData.OriginPosition);
                 DestroyProfileSnapshot(profile);
-                return;
+                return null;
+            }
+
+            if (!normalizedData.HasAppliedSpeedMultiplier)
+            {
+                normalizedData.SpeedUnitsPerSecond *= Mathf.Max(
+                    0f,
+                    profile.ProjectileSpeedMultiplier);
+                normalizedData.HasAppliedSpeedMultiplier = true;
+            }
+
+            if (!normalizedData.HasAppliedSpeedVariance)
+            {
+                normalizedData.SpeedUnitsPerSecond = ProjectileLaunchPattern.GetSpeed(
+                    normalizedData.SpeedUnitsPerSecond,
+                    profile.RandomSpeedVariance);
+                normalizedData.HasAppliedSpeedVariance = true;
             }
 
             GameObject viewInstance = _viewPool?.RentProjectileView(
@@ -114,17 +262,27 @@ namespace CombatSystem
                 normalizedData.OriginPosition,
                 Quaternion.LookRotation(launchDirection, Vector3.up));
             ProjectileRuntime runtime = _runtimePool.Rent(normalizedData, viewInstance);
+            if (trackingTarget != null && trackingTarget.IsAlive)
+            {
+                runtime.TrackingTarget = trackingTarget;
+            }
+
             profile.TrajectoryDefinition?.InitializeRuntime(runtime, _spatialQueryService);
-            _activeProjectiles.Add(runtime);
+            return runtime;
         }
 
         /// <summary>由 VContainer 每帧推进投射物模拟。</summary>
-        public void Tick() => SimulateStep(Time.deltaTime);
+        public void Tick()
+        {
+            using var profilerScope = TickMarker.Auto();
+            SimulateStep(Time.deltaTime);
+        }
 
         /// <summary>按指定时间步推进所有活动投射物。</summary>
         /// <param name="deltaTime">本次模拟经过的秒数。</param>
         public void SimulateStep(float deltaTime)
         {
+            using var profilerScope = SimulateStepMarker.Auto();
             deltaTime = Mathf.Max(0f, deltaTime);
             // 反向遍历允许在同一帧释放并移除已完成对象而不跳过下一个元素。
             for (int i = _activeProjectiles.Count - 1; i >= 0; i--)
@@ -139,6 +297,19 @@ namespace CombatSystem
                 ReleaseProjectile(projectile);
                 _activeProjectiles.RemoveAt(i);
             }
+
+            _activeProjectiles.AddRange(_pendingProjectiles);
+            _pendingProjectiles.Clear();
+            AdvancePendingEmissions(deltaTime);
+
+            PublishSpatialSnapshot();
+        }
+
+        /// <summary>完整模拟步结束后批量发布分类索引，物理扫掠仍由碰撞服务执行。</summary>
+        private void PublishSpatialSnapshot()
+        {
+            using var profilerScope = PublishSpatialSnapshotMarker.Auto();
+            _projectileSnapshotPublisher?.PublishProjectiles(_activeProjectiles);
         }
 
         /// <summary>释放所有活动投射物和对象池资源。</summary>
@@ -150,6 +321,17 @@ namespace CombatSystem
             }
 
             _activeProjectiles.Clear();
+            for (int i = 0; i < _pendingProjectiles.Count; i++)
+            {
+                ReleaseProjectile(_pendingProjectiles[i]);
+            }
+
+            _pendingProjectiles.Clear();
+            for (int index = 0; index < _pendingEmissions.Count; index++)
+            {
+                DestroyProfileSnapshot(_pendingEmissions[index].ProfileSnapshot);
+            }
+            _pendingEmissions.Clear();
             _viewPool?.ClearAllProjectileViews();
             _runtimePool?.ClearAvailableRuntimes();
         }
@@ -169,8 +351,12 @@ namespace CombatSystem
                 ? profile.TrajectoryDefinition
                 : null;
             projectile.SimulationDeltaTime = deltaTime;
+            projectile.DirectionChangedThisStep = false;
             Vector3 direction = trajectory != null
-                ? trajectory.GetDirection(projectile, projectile.Direction).normalized
+                ? trajectory.GetDirection(
+                    projectile,
+                    projectile.Direction,
+                    _spatialQueryService).normalized
                 : projectile.Direction;
             if (direction.sqrMagnitude < 0.0001f)
             {
@@ -189,7 +375,9 @@ namespace CombatSystem
                 return;
             }
 
-            float travelDistance = projectile.Data.SpeedUnitsPerSecond * deltaTime;
+            float travelDistance = projectile.Data.SpeedUnitsPerSecond * deltaTime +
+                projectile.PendingTravelDistance;
+            projectile.PendingTravelDistance = 0f;
             if (!canContinueBeyondTravelLimit)
             {
                 travelDistance = Mathf.Min(travelDistance, remainingDistance);
@@ -232,6 +420,10 @@ namespace CombatSystem
                             collision.Target,
                             collision.Hit.point,
                             collision.Hit.normal);
+                        if (projectile.DirectionChangedThisStep || projectile.IsCompleted)
+                        {
+                            break;
+                        }
                     }
 
                     hasCollision = true;
@@ -260,7 +452,14 @@ namespace CombatSystem
 
             if (hasCollision && !projectile.IsCompleted)
             {
-                if (trajectory != null && trajectory.ContinuesAfterHit)
+                if (projectile.DirectionChangedThisStep)
+                {
+                    projectile.PendingTravelDistance = Mathf.Max(
+                        0f,
+                        travelDistance - firstCollisionDistance);
+                    projectile.Position += projectile.Direction * 0.01f;
+                }
+                else if (trajectory != null && trajectory.ContinuesAfterHit)
                 {
                     float remainingAfterHit = Mathf.Max(0f, travelDistance - firstCollisionDistance);
                     projectile.Position += direction * remainingAfterHit;
@@ -268,8 +467,7 @@ namespace CombatSystem
                 }
                 else
                 {
-                    // 穿透轨迹后偏移一点距离，避免下一帧停在同一碰撞面上。
-                    projectile.Position += direction * 0.01f;
+                    projectile.Position += projectile.Direction * 0.01f;
                 }
             }
 
@@ -307,14 +505,14 @@ namespace CombatSystem
                     out RaycastHit hit,
                     out IDamageable target))
             {
-                _effectDispatcher?.DispatchExpiredEffects(
+                _hitResolver.DispatchExpiredEffects(
                     projectileData.ProjectileProfileSnapshot,
                     projectileData.OriginPosition +
                     projectileData.LaunchDirection * projectileData.MaximumTravelDistance);
                 return;
             }
 
-            SubmitHit(
+            _hitResolver.SubmitHitscan(
                 projectileData,
                 projectileData.ProjectileProfileSnapshot,
                 target,
@@ -322,7 +520,7 @@ namespace CombatSystem
                 hit.normal);
         }
 
-        /// <summary>处理一次投射物命中，包含重复目标过滤和穿透消耗。</summary>
+        /// <summary>将碰撞结果交给命中处理器，保持模拟循环只负责运动与碰撞。</summary>
         /// <param name="projectile">发生命中的投射物运行时状态。</param>
         /// <param name="target">命中的伤害目标。</param>
         /// <param name="hitPosition">命中位置。</param>
@@ -333,120 +531,27 @@ namespace CombatSystem
             Vector3 hitPosition,
             Vector3 hitNormal)
         {
-            if (target == null)
-            {
-                return;
-            }
-
-            int targetInstanceId = target.Transform != null
-                ? target.Transform.GetInstanceID()
-                : 0;
-            if (targetInstanceId != 0 &&
-                !projectile.HitTargetInstanceIds.Add(targetInstanceId))
-            {
-                return;
-            }
-
-            SubmitHit(
-                projectile.Data,
-                projectile.Data.ProjectileProfileSnapshot,
-                target,
-                hitPosition,
-                hitNormal,
-                projectile);
-
-            TrajectoryDefinitionSO trajectory = projectile.Data.ProjectileProfileSnapshot != null
-                ? projectile.Data.ProjectileProfileSnapshot.TrajectoryDefinition
-                : null;
-            if (trajectory != null && trajectory.ContinuesAfterHit)
-            {
-                return;
-            }
-
-            if (projectile.RemainingPenetrationCount > 0)
-            {
-                projectile.RemainingPenetrationCount--;
-                return;
-            }
-
-            projectile.IsCompleted = true;
+            _hitResolver.ApplyProjectileHit(projectile, target, hitPosition, hitNormal);
         }
 
-        /// <summary>使用普通投射物和 Hitscan 共用的命中提交链。</summary>
-        /// <param name="projectileData">投射物生成时的伤害数据快照。</param>
-        /// <param name="profile">投射物生成时的配置快照。</param>
-        /// <param name="target">命中的伤害目标。</param>
-        /// <param name="hitPosition">命中位置。</param>
-        /// <param name="hitNormal">命中法线。</param>
-        private void SubmitHit(
+        /// <summary>为分裂子弹复制命中记录、设置目标并排队，避免修改正在遍历的活动列表。</summary>
+        private void QueueSplitProjectile(
             ProjectileData projectileData,
-            ProjectileProfileSO profile,
-            IDamageable target,
-            Vector3 hitPosition,
-            Vector3 hitNormal,
-            ProjectileRuntime projectile = null)
+            ProjectileRuntime source,
+            IDamageable trackingTarget)
         {
-            Vector3 impactDirection = projectile != null
-                ? projectile.Direction
-                : projectileData.LaunchDirection;
-            DamageRequest request = CreateDamageRequest(
-                projectileData,
-                hitPosition,
-                hitNormal,
-                impactDirection);
-            _effectDispatcher?.DispatchBeforeHitEffects(
-                profile,
-                request,
-                target);
-            DamageResult result = default;
-            _damageProcessor?.TryApplyDamage(target, request, out result);
-            if (_effectDispatcher is IProjectileStateEffectDispatcher stateEffectDispatcher)
+            ProjectileRuntime child = SpawnSingleProjectile(in projectileData, trackingTarget);
+            if (child == null)
             {
-                stateEffectDispatcher.DispatchHitEffects(
-                    projectile,
-                    profile,
-                    request,
-                    result,
-                    target);
+                return;
             }
-            else
-            {
-                _effectDispatcher?.DispatchHitEffects(
-                    profile,
-                    request,
-                    result,
-                    target);
-            }
-            HitProcessed?.Invoke(new ProjectileHitContext(
-                projectileData,
-                target,
-                hitPosition,
-                hitNormal,
-                result));
-        }
 
-        /// <summary>将投射物数据和物理命中信息转换为伤害请求。</summary>
-        /// <param name="projectileData">投射物伤害数据。</param>
-        /// <param name="hitPosition">命中位置。</param>
-        /// <param name="hitNormal">命中法线。</param>
-        /// <returns>统一伤害管线使用的请求。</returns>
-        private static DamageRequest CreateDamageRequest(
-            ProjectileData projectileData,
-            Vector3 hitPosition,
-            Vector3 hitNormal,
-            Vector3 impactDirection)
-        {
-            return new DamageRequest
+            foreach (int targetInstanceId in source.HitTargetInstanceIds)
             {
-                AttackInstanceId = projectileData.AttackInstanceId,
-                SourceInstanceId = projectileData.SourceInstanceId,
-                DamageAmount = projectileData.DamageAmount,
-                DamageType = projectileData.DamageType,
-                HitPosition = hitPosition,
-                HitNormal = hitNormal,
-                ImpactDirection = impactDirection,
-                WasCritical = projectileData.WasCritical
-            };
+                child.HitTargetInstanceIds.Add(targetInstanceId);
+            }
+
+            _pendingProjectiles.Add(child);
         }
 
         /// <summary>标记投射物过期并分发过期效果。</summary>
@@ -459,7 +564,7 @@ namespace CombatSystem
             }
 
             projectile.IsCompleted = true;
-            _effectDispatcher?.DispatchExpiredEffects(
+            _hitResolver.DispatchExpiredEffects(
                 projectile.Data.ProjectileProfileSnapshot,
                 projectile.Position);
         }
@@ -509,6 +614,30 @@ namespace CombatSystem
             else
             {
                 UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        private struct PendingProjectileEmission
+        {
+            public readonly ProjectileData Template;
+            public readonly ProjectileProfileSO ProfileSnapshot;
+            public readonly int ProjectileCount;
+            public readonly float SecondsBetweenShots;
+            public int NextProjectileIndex;
+            public float SecondsUntilNextShot;
+
+            public PendingProjectileEmission(
+                ProjectileData template,
+                ProjectileProfileSO profileSnapshot,
+                int projectileCount,
+                float secondsBetweenShots)
+            {
+                Template = template;
+                ProfileSnapshot = profileSnapshot;
+                ProjectileCount = projectileCount;
+                SecondsBetweenShots = secondsBetweenShots;
+                NextProjectileIndex = 1;
+                SecondsUntilNextShot = secondsBetweenShots;
             }
         }
     }

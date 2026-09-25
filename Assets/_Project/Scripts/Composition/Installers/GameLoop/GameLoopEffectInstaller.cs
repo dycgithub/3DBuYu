@@ -4,8 +4,8 @@ using VContainer;
 using VContainer.Unity;
 
 /// <summary>
-/// GameLoop 特效段：保留原 Scope 提前注册的目录配置，并注册后置的升级表现服务。
-/// 目录为空时保持原 Scope 的错误日志；升级服务为子容器单例。
+/// GameLoop 特效段：注册当前场景使用的战斗特效目录。
+/// 目录缺失时保留原有错误日志，但不注册空引用。
 /// </summary>
 public sealed class GameLoopEffectInstaller : IInstaller
 {
@@ -16,7 +16,7 @@ public sealed class GameLoopEffectInstaller : IInstaller
     /// 创建特效注册器。
     /// </summary>
     /// <param name="combatEffectCatalog">GameLoopLifetimeScope 的战斗特效目录，可为空。</param>
-    /// <param name="logContext">原 Scope 对应的日志上下文对象。</param>
+    /// <param name="logContext">GameLoopLifetimeScope 的日志上下文对象。</param>
     public GameLoopEffectInstaller(
         CombatEffectCatalogSO combatEffectCatalog,
         UnityEngine.Object logContext)
@@ -26,7 +26,7 @@ public sealed class GameLoopEffectInstaller : IInstaller
     }
 
     /// <summary>
-    /// 注册战斗特效目录和升级特效播放服务。
+    /// 注册战斗特效目录。
     /// </summary>
     /// <param name="builder">GameLoopLifetimeScope 使用的容器构建器。</param>
     public void Install(IContainerBuilder builder)
@@ -39,7 +39,5 @@ public sealed class GameLoopEffectInstaller : IInstaller
         {
             Debug.LogError("[GameLoopLifetimeScope] 未配置 CombatEffectCatalogSO。", _logContext);
         }
-
-        builder.Register<UpgradeEffectPlayer>(Lifetime.Singleton).AsSelf();
     }
 }

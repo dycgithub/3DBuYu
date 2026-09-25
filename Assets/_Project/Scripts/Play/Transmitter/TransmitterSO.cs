@@ -1,5 +1,6 @@
 using UnityEngine;
 using CombatSystem;
+using EffectSystem;
 using UnityEngine.Serialization;
 
 namespace Play
@@ -73,5 +74,12 @@ namespace Play
         [Tooltip("当背包未装备对应武器时使用的默认投射物配置。")]
         [FormerlySerializedAs("defaultBullet")]
         public ProjectileProfileSO defaultProjectileProfile;
+
+        [Header("发射表现")]
+        [Tooltip("该发射口成功提交攻击时播放的默认音效。")]
+        public AudioClip fireSound;
+
+        [Tooltip("该发射口成功提交攻击时播放的特效。None 表示不播放。")]
+        public EffectId fireEffectId = EffectId.TransmitterFire;
     }
 }

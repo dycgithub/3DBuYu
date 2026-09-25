@@ -30,5 +30,7 @@ namespace CombatSystem
         public ISpatialQueryService SpatialQueryService;
         /// <summary>当前投射物的可变状态；Hitscan 没有该状态。</summary>
         public ProjectileRuntime ProjectileState;
+        /// <summary>用于挂接命中后持续状态的场景 Buff 服务。</summary>
+        public IBuffService BuffService;
     }
 }

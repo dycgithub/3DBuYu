@@ -15,15 +15,21 @@ namespace EffectSystem
 
         private readonly Dictionary<EffectId, List<GameObject>> _activeEffectsById = new();
         private readonly Dictionary<GameObject, Coroutine> _returnRoutines = new();
+        private readonly HashSet<GameObject> _activeEffects = new();
 
         private IGameObjectPool _pool;
         private CombatEffectCatalogSO _catalog;
 
+        /// <summary>注入对象池并尝试获取特效目录；目录缺失时保留管理器但不播放目录特效。</summary>
+        /// <param name="pool">提供特效实例租借和归还能力的对象池。</param>
+        /// <param name="resolver">当前 GameLoop 容器，用于可选解析特效目录。</param>
         [Inject]
-        public void Construct(IGameObjectPool pool, CombatEffectCatalogSO catalog)
+        public void Construct(IGameObjectPool pool, IObjectResolver resolver)
         {
             _pool = pool;
-            _catalog = catalog;
+            _catalog = resolver.TryResolve(out CombatEffectCatalogSO catalog)
+                ? catalog
+                : null;
         }
 
         public GameObject PlayEffect(EffectId effectId, Vector3 position)
@@ -52,7 +58,7 @@ namespace EffectSystem
                 entry.Prefab,
                 position,
                 Quaternion.identity,
-                Vector3.one,
+                Vector3.one * Mathf.Max(0.01f, entry.Scale),
                 lifetime,
                 parent,
                 settings);
@@ -92,8 +98,17 @@ namespace EffectSystem
             if (effect == null)
                 return null;
 
+            _activeEffects.Add(effect);
             Transform effectTransform = effect.transform;
-            effectTransform.SetPositionAndRotation(position, rotation);
+            if (parent != null)
+            {
+                effectTransform.SetLocalPositionAndRotation(Vector3.zero, Quaternion.identity);
+            }
+            else
+            {
+                effectTransform.SetPositionAndRotation(position, rotation);
+            }
+
             effectTransform.localScale = scale;
             PrepareForPooling(effect);
             RestartParticleSystems(effect);
@@ -106,14 +121,26 @@ namespace EffectSystem
 
         public void Stop(GameObject instance)
         {
+            if (ReferenceEquals(instance, null))
+                return;
+
+            bool wasActive = _activeEffects.Remove(instance);
+            if (_returnRoutines.Remove(instance, out Coroutine routine))
+            {
+                StopCoroutine(routine);
+                wasActive = true;
+            }
+
+            RemoveFromNamedTracking(instance);
+            if (!wasActive)
+            {
+                return;
+            }
+
             if (instance == null)
                 return;
 
-            if (_returnRoutines.Remove(instance, out Coroutine routine))
-                StopCoroutine(routine);
-
             StopParticleSystems(instance);
-            RemoveFromNamedTracking(instance);
             _pool?.Return(instance);
         }
 
@@ -217,13 +244,28 @@ namespace EffectSystem
             }
         }
 
+        /// <summary>管理器被禁用或场景卸载时归还全部活动特效。</summary>
+        private void OnDisable()
+        {
+            ClearActiveEffects();
+        }
+
         private void OnDestroy()
         {
-            foreach (Coroutine routine in _returnRoutines.Values)
-                StopCoroutine(routine);
-
+            ClearActiveEffects();
             _returnRoutines.Clear();
+            _activeEffects.Clear();
             _activeEffectsById.Clear();
+        }
+
+        /// <summary>在管理器销毁前归还所有仍由本组件租借的特效。</summary>
+        private void ClearActiveEffects()
+        {
+            var activeEffects = new List<GameObject>(_activeEffects);
+            for (int index = 0; index < activeEffects.Count; index++)
+            {
+                Stop(activeEffects[index]);
+            }
         }
     }
 }

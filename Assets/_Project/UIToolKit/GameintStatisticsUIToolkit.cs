@@ -216,11 +216,14 @@ public sealed class GameintStatisticsUIToolkit : MonoBehaviour
 
     private void RefreshVictoryReward()
     {
-        int sessionPoints = _gameManager != null ? Mathf.Max(0, _gameManager.SessionPoints) : 0;
+        int basePoints = _gameManager != null ? Mathf.Max(0, _gameManager.BaseSessionPoints) : 0;
+        int overtimePoints = _gameManager != null ? Mathf.Max(0, _gameManager.OvertimeSessionPoints) : 0;
         float settlementMultiplier = _gameManager != null ? _gameManager.SettlementMultiplier : 1f;
+        float overtimeMultiplier = _gameManager != null ? Mathf.Max(1f, _gameManager.OvertimeMultiplier) : 1f;
         int reward = _gameManager != null ? Mathf.Max(0, _gameManager.VictoryRewardPreview) : 0;
         _victoryRewardLabel.text =
-            $"胜利奖励：floor(本局积分 {sessionPoints} × 结算倍率 {settlementMultiplier:0.##}) = {reward}";
+            $"胜利奖励：floor({basePoints} × {settlementMultiplier:0.##} + " +
+            $"{overtimePoints} × {overtimeMultiplier:0.##}) = {reward}";
     }
 
     private void RefreshGlobalPoints()

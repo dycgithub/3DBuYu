@@ -33,6 +33,15 @@ namespace CombatSystem
         CriticalDamage = 8,
 
         /// <summary>投射物弹跳次数修正。</summary>
-        ProjectileBounceCount = 9
+        ProjectileBounceCount = 9,
+
+        /// <summary>固定时间内持续恢复生命或等价生存资源。</summary>
+        HealingOverTime = 10,
+
+        /// <summary>周期性施加火焰伤害。</summary>
+        DamageOverTime = 11,
+
+        /// <summary>允许敌人发起新攻击的倍率。</summary>
+        AttackAvailability = 12
     }
 }

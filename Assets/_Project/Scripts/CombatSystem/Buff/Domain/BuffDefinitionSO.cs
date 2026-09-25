@@ -21,6 +21,12 @@ namespace CombatSystem
         [FormerlySerializedAs("Type")]
         public BuffModifierType ModifierType;
 
+        /// <summary>
+        /// 可选的叠层组标识。为空时为兼容旧资产回退到 ModifierType。
+        /// 相同来源、相同叠层组的 Buff 才会共享刷新或叠层状态。
+        /// </summary>
+        public string StackGroupId;
+
         /// <summary>该 Buff 是否属于有害效果。</summary>
         public BuffPolarity Polarity = BuffPolarity.Harmful;
 
@@ -32,7 +38,11 @@ namespace CombatSystem
         [FormerlySerializedAs("Value")]
         public float ModifierValue;
 
-        /// <summary>同来源、同类别 Buff 再次施加时使用的叠加策略。</summary>
+        /// <summary>持续治疗 Buff 每秒恢复的生命或等价生存资源。</summary>
+        [Min(0f)]
+        public float HealingPerSecond;
+
+        /// <summary>同来源、同叠层组 Buff 再次施加时使用的叠加策略。</summary>
         public BuffStackPolicy StackPolicy = BuffStackPolicy.RefreshDuration;
 
         /// <summary>该 Buff 允许达到的最大层数。</summary>

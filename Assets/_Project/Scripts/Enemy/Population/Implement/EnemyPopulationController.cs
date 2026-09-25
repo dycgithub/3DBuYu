@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using GameSystem;
 using R3;
 using Services;
@@ -6,195 +7,257 @@ using VContainer;
 
 namespace EnemySystem
 {
-    /// <summary>按难度启动数量调度，独立发布首次铺怪和补怪周期事件。</summary>
+    /// <summary>管理普通怪物人口和精英、Boss 的一次性时间规则。</summary>
     public sealed class EnemyPopulationController : MonoBehaviour, IEnemyPopulationService
     {
-        [SerializeField] private Enemy normalPrefab;
-        [SerializeField] private Enemy elitePrefab;
-        [SerializeField] private Enemy bossPrefab;
         [Inject] private IEnemySpawner _spawner;
+
         private readonly Subject<Unit> _started = new();
-        private readonly Subject<Unit> _initialCompleted = new();
-        private readonly Subject<Unit> _refillStarted = new();
-        private readonly Subject<Unit> _refillCompleted = new();
-        private EnemyPopulationSchedule _schedule;
-        private EnemyPopulationSchedule _tickingSchedule;
         private DifficultyConfig _difficulty;
+        private NormalPopulationSchedule _normalSchedule;
+        private SpecialEnemySpawnSchedule _specialSchedule;
+        private NormalPopulationSchedule _tickingNormalSchedule;
         private bool _paused;
+        private float _elapsedTime;
         private bool _spawnFailureReported;
+        private bool _spawnerCleared;
+        private bool _destroyed;
 
         public int EnemiesAlive => _spawner?.ActiveEnemyCount ?? 0;
         public int MaximumPopulation { get; private set; }
         public DifficultyLevel Difficulty { get; private set; }
         public Observable<int> OnEnemiesAliveChanged => _spawner.OnActiveEnemyCountChanged;
         public Observable<Unit> OnPopulationStarted => _started;
-        public Observable<Unit> OnInitialCompleted => _initialCompleted;
-        public Observable<Unit> OnRefillStarted => _refillStarted;
-        public Observable<Unit> OnRefillCompleted => _refillCompleted;
 
-        /// <summary>每局只启动一次，提前验证当前难度实际使用的预制体。</summary>
+        /// <summary>启动当前难度的普通人口和特殊时间表。</summary>
         public void StartPopulation(DifficultyConfig difficulty)
         {
-            if (_schedule != null)
+            if (_normalSchedule != null)
             {
                 return;
             }
-            EnemyQuota quota = EnemyQuota.ForDifficulty(difficulty != null ? difficulty.Level : DifficultyLevel.Easy);
-            if (!HasRequiredPrefabs(quota))
+
+            if (!HasRequiredConfig(difficulty))
             {
-                Debug.LogError("[EnemyPopulation] 生成服务或当前难度的怪物预制体未配置。", this);
+                Debug.LogError("[EnemyPopulation] 当前难度没有有效的普通怪物配置或生成服务。", this);
                 return;
             }
+
             _difficulty = difficulty;
-            Difficulty = difficulty != null ? difficulty.Level : DifficultyLevel.Easy;
-            MaximumPopulation = quota.Total;
+            Difficulty = difficulty.Level;
+            MaximumPopulation = difficulty.NormalPopulationTarget;
+            _normalSchedule = new NormalPopulationSchedule(MaximumPopulation);
+            _specialSchedule = new SpecialEnemySpawnSchedule(difficulty.SpecialSpawnRules);
+            _elapsedTime = 0f;
             _paused = false;
             _spawnFailureReported = false;
-            _schedule = new EnemyPopulationSchedule(quota);
+            _spawnerCleared = false;
             _started.OnNext(Unit.Default);
         }
 
-        /// <summary>
-        /// 切换后续生成难度并以当前存活数量作为新调度的起点。
-        /// </summary>
-        /// <param name="difficulty">目标难度配置。</param>
-        /// <returns>目标配置有效且切换成功时返回 true。</returns>
+        /// <summary>切换普通人口配置并保留当前已生成的特殊规则状态。</summary>
         public bool TryChangeDifficulty(DifficultyConfig difficulty)
         {
-            if (_schedule == null || difficulty == null)
+            if (_normalSchedule == null || !HasRequiredConfig(difficulty))
             {
                 return false;
             }
 
-            EnemyQuota quota = EnemyQuota.ForDifficulty(difficulty.Level);
-            if (!HasRequiredPrefabs(quota))
-            {
-                Debug.LogError("[EnemyPopulation] 目标难度的怪物预制体未配置。", this);
-                return false;
-            }
-
-            int[] existingCounts =
-            {
-                _spawner.CountRank(EnemyRank.Normal),
-                _spawner.CountRank(EnemyRank.Elite),
-                _spawner.CountRank(EnemyRank.Boss)
-            };
             _difficulty = difficulty;
             Difficulty = difficulty.Level;
-            MaximumPopulation = quota.Total;
+            MaximumPopulation = difficulty.NormalPopulationTarget;
+            _normalSchedule = new NormalPopulationSchedule(MaximumPopulation);
+            _specialSchedule.Replace(difficulty.SpecialSpawnRules);
             _spawnFailureReported = false;
-            _schedule = new EnemyPopulationSchedule(quota, existingCounts);
             return true;
         }
 
-        /// <summary>只推进运行中的调度；事件回调停止本局后不再继续发送旧事件。</summary>
+        /// <summary>按规则 ID 触发一次特殊敌人生成，供未来事件系统调用。</summary>
+        public bool TriggerSpecialSpawn(string ruleId)
+        {
+            if (_paused || _specialSchedule == null)
+            {
+                return false;
+            }
+
+            return _specialSchedule.TryTrigger(ruleId, TrySpawnSpecial);
+        }
+
+        /// <summary>推进普通人口补充和特殊时间表。</summary>
         private void Update()
         {
             AdvancePopulation(Time.deltaTime);
         }
 
-        /// <summary>隔离时间步与 Unity 回调，零时间及暂停不产生补怪周期事件。</summary>
+        /// <summary>隔离时间步，暂停或停止时不推进任何生成状态。</summary>
         private void AdvancePopulation(float deltaTime)
         {
-            if (_paused || _schedule == null || deltaTime <= 0f || float.IsNaN(deltaTime) || float.IsInfinity(deltaTime))
+            if (_paused || _normalSchedule == null || deltaTime <= 0f ||
+                float.IsNaN(deltaTime) || float.IsInfinity(deltaTime))
             {
                 return;
             }
-            EnemyPopulationSchedule current = _schedule;
-            bool initial = current.InitialCompleted;
-            bool refill = current.IsRefilling;
-            int primaryEnemiesAlive = _spawner.CountRank(EnemyRank.Normal) +
-                _spawner.CountRank(EnemyRank.Elite) +
-                _spawner.CountRank(EnemyRank.Boss);
-            bool beginsRefill = initial && !refill &&
-                (long)primaryEnemiesAlive * 5 < (long)MaximumPopulation * 4;
-            _tickingSchedule = current;
+
+            _elapsedTime += deltaTime;
+            NormalPopulationSchedule normalSchedule = _normalSchedule;
+            _tickingNormalSchedule = normalSchedule;
             try
             {
-                current.Tick(deltaTime, _spawner.CountRank, TrySpawn);
+                normalSchedule.Tick(
+                    deltaTime,
+                    () => _spawner.CountCategory(EnemySpawnCategory.Normal),
+                    TrySpawnNormal);
             }
             finally
             {
-                _tickingSchedule = null;
+                _tickingNormalSchedule = null;
             }
-            if (current != _schedule)
+
+            if (normalSchedule != _normalSchedule || _specialSchedule == null)
             {
                 return;
             }
-            if (!initial && current.InitialCompleted)
-            {
-                _initialCompleted.OnNext(Unit.Default);
-            }
-            if (current != _schedule)
-            {
-                return;
-            }
-            if (beginsRefill)
-            {
-                _refillStarted.OnNext(Unit.Default);
-            }
-            if (current == _schedule && (refill || beginsRefill) && !current.IsRefilling)
-            {
-                _refillCompleted.OnNext(Unit.Default);
-            }
+
+            SpecialEnemySpawnSchedule specialSchedule = _specialSchedule;
+            specialSchedule.Tick(_elapsedTime, TrySpawnSpecial);
         }
 
-        /// <summary>同步提交生成，成功后存活数立即更新，不存在未计入预算的排队对象。</summary>
-        private bool TrySpawn(EnemyRank rank)
+        /// <summary>按当前难度权重选择并生成一个普通怪物。</summary>
+        private bool TrySpawnNormal()
         {
-            // 数量事件可能同步停止并重开本局，旧循环不得向新调度继续生成。
-            if (_schedule == null || _schedule != _tickingSchedule || _paused)
+            if (_normalSchedule == null || _normalSchedule != _tickingNormalSchedule || _paused)
             {
                 return false;
             }
-            Enemy prefab = rank switch
+
+            Enemy prefab = NormalEnemySelector.Select(
+                _difficulty.NormalSpawnOptions,
+                Random.value);
+            return TrySpawn(prefab, EnemySpawnCategory.Normal);
+        }
+
+        /// <summary>生成时间表指定的一只精英或 Boss。</summary>
+        private bool TrySpawnSpecial(SpecialEnemySpawnRule rule)
+        {
+            if (rule == null || (rule.Category != EnemySpawnCategory.Elite &&
+                rule.Category != EnemySpawnCategory.Boss))
             {
-                EnemyRank.Elite => elitePrefab,
-                EnemyRank.Boss => bossPrefab,
-                _ => normalPrefab
-            };
-            bool spawned = _spawner.TrySpawnEnemy(prefab, rank,
+                return false;
+            }
+
+            return TrySpawn(rule.Prefab, rule.Category);
+        }
+
+        /// <summary>满员时等待死亡补位；仅对实际生成故障记录错误。</summary>
+        private bool TrySpawn(Enemy prefab, EnemySpawnCategory category)
+        {
+            if (_spawner.ActiveEnemyCount >= EnemyPopulationLimits.MaximumAlive)
+            {
+                return false;
+            }
+
+            if (_normalSchedule == null || _paused || prefab == null)
+            {
+                if (prefab == null && !_spawnFailureReported)
+                {
+                    _spawnFailureReported = true;
+                    Debug.LogError("[EnemyPopulation] 生成规则没有配置有效的敌人预制体。", this);
+                }
+
+                return false;
+            }
+
+            bool spawned = _spawner.TrySpawnEnemy(
+                prefab,
+                category,
                 _difficulty != null ? _difficulty.EnemyHealthMultiplier : 1f,
                 _difficulty != null ? _difficulty.EnemySpeedMultiplier : 1f);
             if (!spawned && !_spawnFailureReported)
             {
                 _spawnFailureReported = true;
-                Debug.LogError("[EnemyPopulation] 生成失败，保留剩余配额等待重试；请检查对象池、ECS 容量和预制体。", this);
+                Debug.LogError("[EnemyPopulation] 敌人生成失败，请检查对象池、ECS容量和预制体配置。", this);
             }
+
             return spawned;
         }
 
-        /// <summary>检查当前配额所需的生成服务和预制体是否齐全。</summary>
-        /// <param name="quota">待验证的敌人配额。</param>
-        /// <returns>当前配额可以尝试生成时返回 true。</returns>
-        private bool HasRequiredPrefabs(EnemyQuota quota)
+        /// <summary>检查人口服务、目标数量和普通怪物权重配置。</summary>
+        private bool HasRequiredConfig(DifficultyConfig difficulty)
         {
-            return _spawner != null &&
-                   normalPrefab != null &&
-                   (quota.Elite == 0 || elitePrefab != null) &&
-                   (quota.Boss == 0 || bossPrefab != null);
+            if (_spawner == null || difficulty == null || difficulty.NormalPopulationTarget < 0)
+            {
+                return false;
+            }
+
+            if (difficulty.NormalPopulationTarget == 0)
+            {
+                return true;
+            }
+
+            IReadOnlyList<EnemySpawnOption> options = difficulty.NormalSpawnOptions;
+            if (options == null)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < options.Count; index++)
+            {
+                EnemySpawnOption option = options[index];
+                if (option != null && option.Prefab != null && option.Weight > 0f)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
-        /// <summary>暂停时不累计任何生成时间。</summary>
+        /// <summary>暂停普通人口和特殊时间表。</summary>
         public void PausePopulation() => _paused = true;
-        /// <summary>从暂停时保留的计时继续。</summary>
+
+        /// <summary>恢复暂停前保留的生成计时。</summary>
         public void ResumePopulation() => _paused = false;
 
-        /// <summary>取消调度后清理全部敌人，防止清理回调触发补怪。</summary>
+        /// <summary>停止时间表并清理当前敌人。</summary>
         public void StopPopulation()
         {
-            _schedule = null;
+            _normalSchedule = null;
+            _specialSchedule = null;
+            _tickingNormalSchedule = null;
+            _elapsedTime = 0f;
             _paused = false;
-            _spawner?.ClearAll();
+            ClearSpawner();
         }
 
-        /// <summary>释放由本控制器持有的事件流。</summary>
+        /// <summary>组件被禁用或场景卸载时停止调度并清理敌人。</summary>
+        private void OnDisable()
+        {
+            StopPopulation();
+        }
+
+        /// <summary>停止人口调度、清理敌人并释放控制器持有的事件流。</summary>
         private void OnDestroy()
         {
+            if (_destroyed)
+            {
+                return;
+            }
+
+            _destroyed = true;
+            StopPopulation();
             _started.Dispose();
-            _initialCompleted.Dispose();
-            _refillStarted.Dispose();
-            _refillCompleted.Dispose();
+        }
+
+        /// <summary>只执行一次人口清场，避免停止和销毁流程重复归还敌人。</summary>
+        private void ClearSpawner()
+        {
+            if (_spawnerCleared)
+            {
+                return;
+            }
+
+            _spawnerCleared = true;
+            _spawner?.ClearAll();
         }
     }
 }

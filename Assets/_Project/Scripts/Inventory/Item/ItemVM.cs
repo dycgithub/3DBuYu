@@ -6,6 +6,7 @@ using UnityEngine;
 /// 物品数据(VM,纯逻辑,不依赖 MonoBehaviour):
 /// 形状 = 坐标点集;方向 = Dir 四方向;位置 = 网格锚点坐标(包围盒左上角)。
 /// 旋转只改数据,UI 由 View 层驱动刷新。
+/// </summary>
 public class ItemVM
 {
     private static int _nextInstanceId;
@@ -14,6 +15,8 @@ public class ItemVM
     public ItemDefinition Definition { get; }
     /// <summary>跨 UI 场景和 Game 场景保持不变的本局实例身份。</summary>
     public int InstanceId { get; }
+    /// <summary>物品实例的统一强度等级，限制在统一强度表范围内。</summary>
+    public int PowerLevel { get; }
 
     /// <summary>基础方向(0°)形状点集:x=列偏移, y=行偏移(向右/向下为正)。</summary>
     public IReadOnlyList<Vector2Int> BasePoints{ get; set; }
@@ -33,15 +36,18 @@ public class ItemVM
     /// 主构造:由物品定义派生形状(形状解析走 shapeSet,默认全局库)。
     /// basePoints 用于跨场景恢复时保留源网格的精确形状,传入后优先于 shapeSet。
     /// </summary>
+    /// <param name="powerLevel">物品实例的强度等级，限制在统一强度表范围内。</param>
     public ItemVM(
         ItemDefinition definition,
         ItemShapeSet shapeSet = null,
         Vector2Int origin = default,
         IReadOnlyList<Vector2Int> basePoints = null,
-        int instanceId = 0)
+        int instanceId = 0,
+        int powerLevel = 0)
     {
         Definition = definition;
         InstanceId = AllocateInstanceId(instanceId);
+        PowerLevel = Supply.ItemPowerTable.NormalizeLevel(powerLevel);
         var points = basePoints ?? (definition != null
             ? (shapeSet ?? ItemShapeSet.Default).GetPoints(definition.Shape)
             : new List<Vector2Int>());
@@ -55,6 +61,7 @@ public class ItemVM
     {
         Definition = null;
         InstanceId = AllocateInstanceId(instanceId);
+        PowerLevel = 0;
         BasePoints = new List<Vector2Int>(basePoints ?? new List<Vector2Int>());
         LocalGridCoordinate = origin;
         ApplyDirection(Dir.Down);

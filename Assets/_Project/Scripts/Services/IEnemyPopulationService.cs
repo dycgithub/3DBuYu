@@ -3,7 +3,7 @@ using R3;
 
 namespace Services
 {
-    /// <summary>数量调度的生命周期入口及事实事件，不再提供逐波推进。</summary>
+    /// <summary>普通人口和特殊敌人时间表的生命周期入口。</summary>
     public interface IEnemyPopulationService
     {
         int EnemiesAlive { get; }
@@ -11,17 +11,17 @@ namespace Services
         DifficultyLevel Difficulty { get; }
         Observable<int> OnEnemiesAliveChanged { get; }
         Observable<Unit> OnPopulationStarted { get; }
-        Observable<Unit> OnInitialCompleted { get; }
-        Observable<Unit> OnRefillStarted { get; }
-        Observable<Unit> OnRefillCompleted { get; }
         void StartPopulation(DifficultyConfig difficulty);
 
         /// <summary>
-        /// 在当前调度不清空既有敌人的前提下切换后续生成难度。
+        /// 在不清空既有敌人的前提下切换普通人口配置。
         /// </summary>
         /// <param name="difficulty">目标难度配置。</param>
         /// <returns>切换成功时返回 true。</returns>
         bool TryChangeDifficulty(DifficultyConfig difficulty);
+
+        /// <summary>按配置 ID 触发一次特殊敌人生成，供未来事件系统调用。</summary>
+        bool TriggerSpecialSpawn(string ruleId);
 
         void PausePopulation();
         void ResumePopulation();

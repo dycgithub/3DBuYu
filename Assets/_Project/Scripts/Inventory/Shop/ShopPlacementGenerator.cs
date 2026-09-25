@@ -5,8 +5,14 @@ using UnityRandom = UnityEngine.Random;
 
 namespace InventorySystem.Shop
 {
+    /// <summary>
+    /// 按面积权重和网格可用位置生成商店物品。
+    /// 同一次生成调用内会暂时排除最近生成的三个 Item，避免短距离重复。
+    /// </summary>
     internal sealed class ShopPlacementGenerator
     {
+        private const int RecentItemCooldownCount = 3;
+
         private static readonly Dir[] Directions =
         {
             Dir.Down,
@@ -77,11 +83,16 @@ namespace InventorySystem.Shop
             if (candidates.Count == 0) return placements;
 
             var board = new ShopPlacementBoard(width, height);
+            var recentDefinitions = new Queue<ItemDefinition>(RecentItemCooldownCount);
             int attempts = Mathf.Max(1, maxAttempts);
 
             for (int attempt = 0; attempt < attempts && !board.IsFull; attempt++)
             {
-                var groups = BuildFeasibleGroups(candidates, board, areaWeightResolver);
+                var groups = BuildFeasibleGroups(
+                    candidates,
+                    board,
+                    areaWeightResolver,
+                    recentDefinitions);
                 if (groups.Count == 0) break;
 
                 var group = PickGroup(groups);
@@ -94,6 +105,7 @@ namespace InventorySystem.Shop
                     candidate.Direction,
                     position.x,
                     position.y));
+                RememberDefinition(recentDefinitions, candidate.Definition);
             }
 
             return placements;
@@ -129,14 +141,18 @@ namespace InventorySystem.Shop
         private static List<AreaGroup> BuildFeasibleGroups(
             List<Candidate> candidates,
             ShopPlacementBoard board,
-            Func<int, float> areaWeightResolver)
+            Func<int, float> areaWeightResolver,
+            Queue<ItemDefinition> recentDefinitions)
         {
             var groupsByArea = new Dictionary<int, AreaGroup>();
             for (int i = 0; i < candidates.Count; i++)
             {
                 var candidate = candidates[i];
-                if (!board.HasAvailablePosition(candidate.Width, candidate.Height))
+                if (IsRecentlyGenerated(candidate.Definition, recentDefinitions) ||
+                    !board.HasAvailablePosition(candidate.Width, candidate.Height))
+                {
                     continue;
+                }
 
                 float weight = NormalizeWeight(areaWeightResolver(candidate.Area));
                 if (weight <= 0f) continue;
@@ -151,6 +167,35 @@ namespace InventorySystem.Shop
             }
 
             return new List<AreaGroup>(groupsByArea.Values);
+        }
+
+        /// <summary>判断物品是否仍处于本次商店生成的短期冷却窗口。</summary>
+        private static bool IsRecentlyGenerated(
+            ItemDefinition definition,
+            Queue<ItemDefinition> recentDefinitions)
+        {
+            foreach (ItemDefinition recentDefinition in recentDefinitions)
+            {
+                if (ReferenceEquals(recentDefinition, definition))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>记录一次成功生成，并保留固定数量的最近物品。</summary>
+        private static void RememberDefinition(
+            Queue<ItemDefinition> recentDefinitions,
+            ItemDefinition definition)
+        {
+            if (recentDefinitions.Count >= RecentItemCooldownCount)
+            {
+                recentDefinitions.Dequeue();
+            }
+
+            recentDefinitions.Enqueue(definition);
         }
 
         private static AreaGroup PickGroup(List<AreaGroup> groups)

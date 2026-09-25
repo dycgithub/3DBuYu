@@ -1,5 +1,4 @@
 using Interfaces;
-using Play;
 using Services;
 using UnityEngine;
 using Utils;
@@ -57,7 +56,6 @@ namespace EnemySystem.Components
                 return;
             }
 
-            _playerTarget ??= FindFirstObjectByType<PlayerCombatTarget>();
             if (_playerTarget == null || !_playerTarget.IsAlive || _playerTarget.Transform == null)
             {
                 ReturnToRoaming();
@@ -174,9 +172,7 @@ namespace EnemySystem.Components
         /// <summary>获取当前敌人到玩家的方向。</summary>
         private Vector3 GetTargetDirection()
         {
-            return _playerTarget != null && _playerTarget.Transform != null
-                ? _playerTarget.Transform.position - transform.position
-                : Vector3.zero;
+            return _playerTarget.Transform.position - transform.position;
         }
 
         /// <summary>对象池租借时恢复状态。</summary>

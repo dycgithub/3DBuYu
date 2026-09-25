@@ -29,7 +29,7 @@ namespace CombatSystem
         /// </summary>
         /// <param name="itemId">最终物品 ID，可为三位数字字符串。</param>
         /// <param name="scope">解析出的战斗作用域。</param>
-        /// <returns>ID 在 001-015 范围内时返回 <c>true</c>。</returns>
+        /// <returns>ID 在 001-025 范围内时返回 <c>true</c>。</returns>
         public static bool TryResolve(string itemId, out CombatScope scope)
         {
             if (!int.TryParse(itemId, out int numericId))
@@ -55,6 +55,16 @@ namespace CombatSystem
                 13 => CombatScope.CentralAndTransmitter,
                 14 => CombatScope.Transmitter,
                 15 => CombatScope.Central,
+                16 => CombatScope.Transmitter,
+                17 => CombatScope.Transmitter,
+                18 => CombatScope.Transmitter,
+                19 => CombatScope.Transmitter,
+                20 => CombatScope.Transmitter,
+                21 => CombatScope.Transmitter,
+                22 => CombatScope.Central,
+                23 => CombatScope.Central,
+                24 => CombatScope.CentralAndTransmitter,
+                25 => CombatScope.CentralAndTransmitter,
                 _ => CombatScope.None
             };
 

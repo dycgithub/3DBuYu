@@ -21,6 +21,7 @@ public sealed class GameLoopProjectileInstaller : IInstaller
             .AsSelf();
         builder.Register<DamageRequestProcessor>(Lifetime.Singleton)
             .As<IDamageRequestProcessor>()
+            .As<IDamageEventSource>()
             .AsSelf();
         builder.Register<ProjectileEffectDispatcher>(Lifetime.Singleton)
             .As<IProjectileEffectDispatcher>()

@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using Interfaces;
+using CombatSystem;
 using UnityEngine;
+using VContainer;
 
 namespace Play
 {
@@ -16,6 +18,8 @@ namespace Play
 
         private IReadOnlyList<CentralTransmitterRuntime> _ports;
         private bool _initialized;
+
+        [Inject] private ITransmitterGlobalEffectService _globalEffects;
 
         public void Initialize(
             IReadOnlyList<CentralTransmitterRuntime> ports,
@@ -52,6 +56,12 @@ namespace Play
                     continue;
 
                 IDamageable target = _detector.GetTarget(i);
+                IDamageable focusedTarget = _globalEffects?.GetFocusedTarget();
+                if (focusedTarget.IsAliveAndValid())
+                {
+                    target = focusedTarget;
+                }
+
                 if (target.IsAliveAndValid())
                     AimAtTarget(port, target);
                 else

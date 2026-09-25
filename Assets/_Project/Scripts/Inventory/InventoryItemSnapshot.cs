@@ -4,7 +4,7 @@ using UnityEngine;
 
 /// <summary>
 /// 网格物品的跨场景快照。
-/// 快照不持有 ItemVM 或 ItemView，只复制恢复所需的静态定义和网格状态。
+/// 快照不持有 ItemVM 或 ItemView，只复制恢复所需的静态定义、实例强度和网格状态。
 /// </summary>
 public sealed class InventoryItemSnapshot
 {
@@ -12,6 +12,8 @@ public sealed class InventoryItemSnapshot
 
     public ItemDefinition Definition { get; }
     public int InstanceId { get; }
+    /// <summary>物品实例的统一强度等级。</summary>
+    public int PowerLevel { get; }
     public IReadOnlyList<Vector2Int> BasePoints => _basePoints;
     public Dir Direction { get; }
     public Vector2Int LocalGridCoordinate { get; }
@@ -23,6 +25,7 @@ public sealed class InventoryItemSnapshot
 
         Definition = source.Definition;
         InstanceId = source.InstanceId;
+        PowerLevel = source.PowerLevel;
         _basePoints = new List<Vector2Int>(source.BasePoints ?? Array.Empty<Vector2Int>()).AsReadOnly();
         Direction = source.Direction;
         LocalGridCoordinate = source.LocalGridCoordinate;
@@ -35,7 +38,8 @@ public sealed class InventoryItemSnapshot
             Definition,
             origin: LocalGridCoordinate,
             basePoints: _basePoints,
-            instanceId: InstanceId);
+            instanceId: InstanceId,
+            powerLevel: PowerLevel);
         item.SetDirection(Direction);
         return item;
     }

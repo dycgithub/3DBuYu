@@ -4,8 +4,8 @@ using VContainer;
 using VContainer.Unity;
 
 /// <summary>
-/// GameLoop 前置注册段：先注册背包状态，再注册依赖它的移动提示服务。
-/// 两者均为当前 GameLoop 子容器单例。
+/// 注册 GameLoop 子容器独有的背包状态与移动提示服务。
+/// 不向 ProjectLifetimeScope 注册 InventoryManager 或 ItemTooltipManager。
 /// </summary>
 public sealed class GameLoopInventoryInstaller : IInstaller
 {
@@ -27,8 +27,6 @@ public sealed class GameLoopInventoryInstaller : IInstaller
     public void Install(IContainerBuilder builder)
     {
         builder.RegisterEntryPoint<InventoryManager>(Lifetime.Singleton)
-            .As<IInventoryDragState>()
-            .As<IInventorySelectionState>()
             .AsSelf();
         builder.Register<ItemTooltipManager>(Lifetime.Singleton)
             .As<IItemTooltipService>()

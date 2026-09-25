@@ -29,6 +29,7 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
     private List<Image> cells = new();
     private ItemOutlineView outline;
     private ItemPressEffect pressEffect;
+    private ItemMaskedVisual maskedVisual;
 
     public ItemVM ItemVM { get; private set; }
     public GridView OwnerGrid { get; private set; }
@@ -53,6 +54,7 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         }
 
         outline = GetComponentInChildren<ItemOutlineView>(true);
+        maskedVisual = GetComponentInChildren<ItemMaskedVisual>(true);
     }
 
     public void Init(GridView grid, ItemVM item, int col, int row)
@@ -106,10 +108,13 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
 
         ConfigureVisualRoot();
         ClearCells();
-        cells.AddRange(BuildCells(visualRoot, ItemVM.CoordinateSet, ItemVM.RotationOffset,
-            OwnerGrid.CellSize, OwnerGrid.Step,
-            ResolveSprite(ItemVM, OwnerGrid.CellSprite),
-            ResolveColor(ItemVM, OwnerGrid.CellColor)));
+        if (!TryConfigureMaskedVisual())
+        {
+            cells.AddRange(BuildCells(visualRoot, ItemVM.CoordinateSet, ItemVM.RotationOffset,
+                OwnerGrid.CellSize, OwnerGrid.Step,
+                ResolveSprite(ItemVM, OwnerGrid.CellSprite),
+                ResolveColor(ItemVM, OwnerGrid.CellColor)));
+        }
 
         EnsureOutline();
         outline.Rebuild(ItemVM.CoordinateSet, ItemVM.RotationOffset, OwnerGrid.CellSize, OwnerGrid.Step);
@@ -170,6 +175,39 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
             if (cells[i] != null)
                 Destroy(cells[i].gameObject);
         cells.Clear();
+    }
+
+    private bool TryConfigureMaskedVisual()
+    {
+        Sprite sprite = ItemVM?.Definition?.BoundingBoxImage;
+        if (maskedVisual == null || sprite == null)
+        {
+            if (maskedVisual != null)
+            {
+                maskedVisual.gameObject.SetActive(false);
+            }
+
+            return false;
+        }
+
+        maskedVisual.gameObject.SetActive(true);
+        Vector2 currentSize = OwnerGrid.SizeFor(ItemVM);
+        (int width, int height) = GridUtilities.RotationHelper.GetBoundaryBox(ItemVM.BasePoints);
+        float spacing = OwnerGrid.Step - OwnerGrid.CellSize;
+        Vector2 artworkSize = new(
+            width * OwnerGrid.CellSize + Mathf.Max(0, width - 1) * spacing,
+            height * OwnerGrid.CellSize + Mathf.Max(0, height - 1) * spacing);
+        maskedVisual.Configure(
+            ItemVM.CoordinateSet,
+            ItemVM.RotationOffset,
+            OwnerGrid.CellSize,
+            OwnerGrid.Step,
+            sprite,
+            ResolveColor(ItemVM, OwnerGrid.CellColor),
+            currentSize,
+            artworkSize,
+            GridUtilities.RotationHelper.GetRotationAngle(ItemVM.Direction));
+        return true;
     }
 
     /// <summary>

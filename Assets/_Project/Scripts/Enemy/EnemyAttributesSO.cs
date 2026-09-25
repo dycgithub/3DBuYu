@@ -35,6 +35,9 @@ namespace EnemySystem
         [Tooltip("进入死亡状态时播放的效果。")]
         public EffectId deathEffect = EffectId.EnemyDeath;
 
+        [Tooltip("共享材质使用的视觉参数；为空时使用组件默认值。")]
+        public EnemySystem.Visual.EnemyVisualConfigSO visualConfig;
+
         [Header("闪避")]
         [Tooltip("闪避概率，范围为 0 到 1。")]
         [Range(0f, 1f)]
@@ -97,9 +100,9 @@ namespace EnemySystem
         [Min(0f)] public float areaEffectRadius = 5f;
         [Min(0f)] public float areaEffectTickInterval = 0.2f;
         [Range(0f, 1f)] public float areaSlowMultiplier = 0.5f;
-        [Min(0f)] public float areaHealPerSecond = 10f;
         public EnemyAreaEffectType areaEffectType = EnemyAreaEffectType.Slow;
         public BuffDefinitionSO areaSlowBuff;
+        public BuffDefinitionSO areaHealBuff;
 
         [Header("子母敌人")]
         public Enemy childPrefab;

@@ -1,20 +1,22 @@
 using GameSystem;
-using _Project.UI.Common;
 using VContainer;
 using VContainer.Unity;
 using CombatSystem;
 using Services;
 using CameraSystem;
-using SpatialSystem.Bridge;
+using SpatialIndexing;
 using EnemySystem.Spawning;
 using EnemySystem;
 using FlockingSystem.ECS;
 using Interfaces;
 using Play;
+using Play.CombatVisualization.View;
 using UnityEngine;
 using EffectSystem;
 using _Project.UI.Card;
 using _Project.UI.Settings;
+using _Project.UI.RunResult.View;
+using _Project.UI.Damage;
 
 /// <summary>
 /// GameLoopScene 的场景子容器,随场景卸载而销毁。
@@ -30,6 +32,9 @@ public class GameLoopLifetimeScope : LifetimeScope
     [Header("Flocking")]
     [Tooltip("ECS Flocking 的场景级配置资产。")]
     [SerializeField] private EnemyFlockSettingsSO enemyFlockSettings;
+    [Header("Damage Numbers")]
+    [Tooltip("伤害跳字的池和动画配置；为空时使用代码默认值。")]
+    [SerializeField] private DamageNumberConfigSO damageNumberConfig;
 
     /// <summary>
     /// 注册战斗场景范围内的服务、组件和对象池。
@@ -43,10 +48,15 @@ public class GameLoopLifetimeScope : LifetimeScope
             HoverEnabled = hoverTooltipEnabled,
             SelectedEnabled = selectedTooltipEnabled,
         }).Install(builder);
-        builder.RegisterComponentInHierarchy<InputSystem.InputService>().As<IInputService>().AsSelf();
+        // Input 节点属于 GameScene 子容器，玩家控制器和 GameManager 都依赖该接口。
+        builder.RegisterComponentInHierarchy<InputSystem.InputService>()
+            .As<IInputService>()
+            .AsSelf();
         builder.RegisterComponentInHierarchy<EnemyPopulationController>().As<IEnemyPopulationService>().AsSelf();
         builder.RegisterComponentInHierarchy<SpawnPositionProvider>().As<ISpawnPositionProvider>().AsSelf();
-        builder.RegisterComponentInHierarchy<SpatialRegistry>().As<ISpatialQueryService>().AsSelf();
+        builder.Register<SpatialQueryService>(Lifetime.Scoped)
+            .As<ISpatialQueryService>()
+            .AsSelf();
         new GameLoopEnemyInstaller(enemyFlockSettings, name).Install(builder);
         new GameLoopEffectInstaller(combatEffectCatalog, this).Install(builder);
 
@@ -56,12 +66,19 @@ public class GameLoopLifetimeScope : LifetimeScope
         // === 战斗期射击服务(随本局场景销毁) ===
         // 子弹逻辑使用集中式模拟器和对象池；ECS 仅保留 Flocking。
         new GameLoopProjectileInstaller().Install(builder);
+        if (damageNumberConfig != null)
+        {
+            builder.RegisterInstance(damageNumberConfig).AsSelf();
+        }
+
+        builder.RegisterComponentInHierarchy<DamageNumberLayer>().AsSelf();
+        builder.RegisterEntryPoint<DamageNumberSystem>(Lifetime.Singleton).AsSelf();
         // 直接发射入口不处理能量、冷却和阶段，玩家规则服务与敌人组件共用同一投射物管线。
         // 直接技能入口不处理玩家专属前置，玩家释放服务和敌人能力组件共用动作执行器。
         new GameLoopCombatInstaller().Install(builder);
         builder.RegisterComponentInHierarchy<TransmitterBackpackBinder>().AsSelf();
-        builder.RegisterComponentInHierarchy<PointsFlyEffectPresenter>().AsSelf();
         builder.RegisterComponentInHierarchy<GameintStatisticsUIToolkit>().AsSelf();
+        builder.RegisterComponentInHierarchy<RunResultPanel>().AsSelf();
         builder.RegisterComponentInHierarchy<DifficultySelector>().AsSelf();
 
         // 依赖以上服务的核心系统
@@ -74,15 +91,15 @@ public class GameLoopLifetimeScope : LifetimeScope
         builder.RegisterComponentInHierarchy<SphericalCameraDirector>().AsSelf();
         builder.RegisterComponentInHierarchy<EffectSystem.EffectManager>()
             .As<Services.IEffectService>()
-            .As<Services.IPooledEffectService>()
             .AsSelf();
 
         // === 场景组件 ===
-        // 移动方向必须基于 GameScene 相机，不能在 Additive 场景切换期间依赖全局 Camera.main。
+        // 移动方向使用当前 GameLoop 场景相机，并由容器注入 PlayerController。
         builder.RegisterComponentInHierarchy<Camera>().AsSelf();
         builder.RegisterComponentInHierarchy<CentralCore>();
         builder.RegisterComponentInHierarchy<TransmitterFireController>();
         builder.RegisterComponentInHierarchy<PhysicsCentralDetector>();
+        builder.RegisterComponentInHierarchy<CombatRangeVisualization>();
         builder.RegisterComponentInHierarchy<PlayerController>();
         builder.RegisterComponentInHierarchy<PlayerCombatTarget>()
             .As<IPlayerCombatTarget>()

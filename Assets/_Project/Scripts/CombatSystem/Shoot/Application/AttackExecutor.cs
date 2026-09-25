@@ -122,7 +122,10 @@ namespace CombatSystem
         {
             if (_energy != null && baseEnergyCost > 0f)
             {
-                _energy.AddEnergy(baseEnergyCost);
+                float refundAmount = _energy is IEnergyCostService energyCostService
+                    ? energyCostService.GetEffectiveCost(baseEnergyCost)
+                    : baseEnergyCost;
+                _energy.AddEnergy(refundAmount);
             }
         }
     }

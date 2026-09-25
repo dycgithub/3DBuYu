@@ -1,4 +1,5 @@
 using UnityEngine;
+using EffectSystem;
 
 namespace CombatSystem
 {
@@ -17,11 +18,20 @@ namespace CombatSystem
         /// <summary>发射器稳定标识。</summary>
         public string PortId { get; }
 
+        /// <summary>本次攻击成功提交时播放的发射音效。</summary>
+        public AudioClip FireSound { get; }
+
+        /// <summary>本次攻击成功提交时播放的发射特效。</summary>
+        public EffectId FireEffectId { get; }
+
         /// <summary>本次攻击使用的子弹配置。</summary>
         public ProjectileProfileSO ProjectileProfile { get; }
 
         /// <summary>发射点世界坐标。</summary>
         public Vector3 OriginPosition { get; }
+
+        /// <summary>发射点变换；可用于让发射特效跟随发射器。</summary>
+        public Transform OriginTransform { get; }
 
         /// <summary>发射方向。</summary>
         public Vector3 LaunchDirection { get; }
@@ -60,6 +70,9 @@ namespace CombatSystem
         /// <param name="requestedPenetrationCount">一次攻击基础穿透次数。</param>
         /// <param name="criticalHitChance">发射器基础暴击概率。</param>
         /// <param name="criticalHitDamageMultiplier">发射器基础暴击伤害倍率。</param>
+        /// <param name="fireSound">本次攻击成功提交时播放的发射音效。</param>
+        /// <param name="fireEffectId">本次攻击成功提交时播放的发射特效。</param>
+        /// <param name="originTransform">发射点变换。</param>
         public TransmitterAttackInput(
             int sourceInstanceId,
             int transmitterPortIndex,
@@ -73,13 +86,19 @@ namespace CombatSystem
             int requestedPenetrationCount,
             float criticalHitChance,
             float criticalHitDamageMultiplier,
-            string portId = null)
+            string portId = null,
+            AudioClip fireSound = null,
+            EffectId fireEffectId = EffectId.TransmitterFire,
+            Transform originTransform = null)
         {
             SourceInstanceId = sourceInstanceId;
             TransmitterPortIndex = transmitterPortIndex;
             PortId = portId;
+            FireSound = fireSound;
+            FireEffectId = fireEffectId;
             ProjectileProfile = projectileProfile;
             OriginPosition = originPosition;
+            OriginTransform = originTransform;
             LaunchDirection = launchDirection;
             BaseDamage = baseDamage;
             BaseRange = baseRange;

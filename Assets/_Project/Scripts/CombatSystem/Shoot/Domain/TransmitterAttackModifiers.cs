@@ -13,6 +13,9 @@ namespace CombatSystem
         /// <summary>最终伤害乘数。</summary>
         public float DamageMultiplier;
 
+        /// <summary>单次攻击消耗的能量倍率。</summary>
+        public float EnergyCostMultiplier;
+
         /// <summary>最大旅行距离乘数。</summary>
         public float RangeMultiplier;
 
@@ -44,6 +47,7 @@ namespace CombatSystem
         public static TransmitterAttackModifiers Default => new()
         {
             DamageMultiplier = 1f,
+            EnergyCostMultiplier = 1f,
             RangeMultiplier = 1f,
             AttackSpeedMultiplier = 1f,
             CollisionRadiusMultiplier = 1f,
@@ -55,6 +59,7 @@ namespace CombatSystem
         {
             AdditiveDamageBonus = Mathf.Max(0f, AdditiveDamageBonus);
             DamageMultiplier = Mathf.Max(0f, DamageMultiplier);
+            EnergyCostMultiplier = Mathf.Max(0f, EnergyCostMultiplier);
             RangeMultiplier = Mathf.Max(0f, RangeMultiplier);
             AttackSpeedMultiplier = Mathf.Max(0f, AttackSpeedMultiplier);
             CollisionRadiusMultiplier = Mathf.Max(0f, CollisionRadiusMultiplier);

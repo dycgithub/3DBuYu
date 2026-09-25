@@ -4,8 +4,8 @@ using VContainer;
 using VContainer.Unity;
 
 /// <summary>
-/// 注册 UIScene 的背包状态与固定模式提示服务。
-/// 两者均为当前 UIScene 子容器单例；场景显示组件仍由调用方注册。
+/// 注册 UIScene 子容器独有的背包状态与固定模式提示服务。
+/// 不向 ProjectLifetimeScope 注册 InventoryManager 或 ItemTooltipManager。
 /// </summary>
 public sealed class UISceneInventoryInstaller : IInstaller
 {
@@ -27,8 +27,6 @@ public sealed class UISceneInventoryInstaller : IInstaller
     public void Install(IContainerBuilder builder)
     {
         builder.RegisterEntryPoint<InventoryManager>(Lifetime.Singleton)
-            .As<IInventoryDragState>()
-            .As<IInventorySelectionState>()
             .AsSelf();
         builder.Register<ItemTooltipManager>(Lifetime.Singleton)
             .As<IItemTooltipService>()

@@ -1,5 +1,6 @@
 using System;
 using Services;
+using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using VContainer.Unity;
@@ -10,6 +11,9 @@ using VContainer.Unity;
 /// </summary>
 public class InventoryManager : IInventoryDragState, IInventorySelectionState, ITickable
 {
+    private static readonly ProfilerMarker TickMarker =
+        new("3DBuYu/VContainer/InventoryManager.Tick");
+
     /// <summary>当前鼠标悬停的网格(null=没有)。</summary>
     public GridView HoveredGrid { get; private set; }
 
@@ -58,14 +62,19 @@ public class InventoryManager : IInventoryDragState, IInventorySelectionState, I
 
     public void Tick()
     {
+        using var profilerScope = TickMarker.Auto();
         bool rotatePressed = (Keyboard.current != null && Keyboard.current[Key.R].wasPressedThisFrame)
                              || (Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame);
 
         if (rotatePressed && DraggingItem != null)
+        {
             DraggingItem.Rotate();
+        }
 
         // 拖拽中允许鼠标暂时离开网格；拖拽结束后才按网格悬停状态清除选中。
         if (SelectedItem != null && DraggingItem == null && HoveredGrid == null)
+        {
             ClearSelection();
+        }
     }
 }

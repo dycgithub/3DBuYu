@@ -2,6 +2,7 @@ using FlockingSystem.ECS;
 using UnityEngine;
 using VContainer;
 using EnemySystem;
+using EnemySystem.Components;
 
 namespace EnemySystem.Spawning
 {
@@ -30,7 +31,7 @@ namespace EnemySystem.Spawning
         }
 
         /// <summary>
-        /// 从对象池取得敌人并绑定到 ECS Flocking。
+        /// 从对象池取得敌人，激活查询注册后再绑定 ECS，确保空间槽位有效。
         /// </summary>
         /// <param name="prefab">敌人源预制体，同时用于提取 ECS 渲染资源。</param>
         /// <param name="position">敌人的世界坐标。</param>
@@ -43,6 +44,11 @@ namespace EnemySystem.Spawning
             float healthMultiplier, float speedMultiplier)
         {
             if (prefab == null)
+            {
+                return null;
+            }
+
+            if (!ValidatePrefab(prefab))
             {
                 return null;
             }
@@ -78,6 +84,7 @@ namespace EnemySystem.Spawning
                 return null;
             }
 
+            enemyInstance.SetActive(true);
             if (!_flockRuntime.TryAcquireAgent(
                     bridge,
                     prefab,
@@ -90,8 +97,35 @@ namespace EnemySystem.Spawning
                 return null;
             }
 
-            enemyInstance.SetActive(true);
             return enemy;
+        }
+
+        /// <summary>在对象池租借前验证生产敌人所需的根组件组合。</summary>
+        /// <param name="prefab">待生成的敌人预制体。</param>
+        /// <returns>组合完整时返回 true。</returns>
+        private static bool ValidatePrefab(GameObject prefab)
+        {
+            if (prefab.GetComponent<Enemy>() == null)
+            {
+                Debug.LogError($"[EnemyFactory] {prefab.name}: 缺少 Enemy 组件。", prefab);
+                return false;
+            }
+
+            if (prefab.GetComponent<EnemyFlockBridge>() == null)
+            {
+                Debug.LogError($"[EnemyFactory] {prefab.name}: 缺少 EnemyFlockBridge 组件。", prefab);
+                return false;
+            }
+
+            if (prefab.GetComponent<EnemyDeathRewardComponent>() == null)
+            {
+                Debug.LogError(
+                    $"[EnemyFactory] {prefab.name}: 缺少 EnemyDeathRewardComponent，无法接入击杀奖励链。",
+                    prefab);
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>

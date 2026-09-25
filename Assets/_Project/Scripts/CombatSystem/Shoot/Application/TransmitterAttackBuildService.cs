@@ -46,6 +46,7 @@ namespace CombatSystem
                 profile,
                 modifiers.AdditiveDamageBonus,
                 modifiers.DamageMultiplier,
+                modifiers.EnergyCostMultiplier,
                 modifiers.RangeMultiplier,
                 attacksPerSecond,
                 collisionRadius,

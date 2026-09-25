@@ -20,13 +20,15 @@ namespace CombatSystem
                 OriginPosition = attack.OriginPosition,
                 LaunchDirection = attack.LaunchDirection,
                 DamageAmount = attack.DamageAmount,
+                EnergyCost = attack.EnergyCost,
                 SpeedUnitsPerSecond = attack.SpeedUnitsPerSecond,
                 MaximumTravelDistance = attack.MaximumTravelDistance,
                 CollisionRadius = attack.CollisionRadius,
                 PenetrationCount = attack.PenetrationCount,
                 DamageType = attack.DamageType,
                 WasCritical = attack.WasCritical,
-                TargetMode = attack.TargetMode
+                TargetMode = attack.TargetMode,
+                AttacksPerSecond = attack.AttacksPerSecond
             };
         }
 

@@ -134,9 +134,10 @@ namespace EnemySystem.Components
             _deadChildren.Clear();
         }
 
-        /// <summary>对象池租借时清除生成计时，保留仍存活子敌人的归属记录。</summary>
+        /// <summary>租借时补齐宿主缓存并清除计时，保留仍存活子敌人的归属记录。</summary>
         public void OnRentFromPool()
         {
+            _enemy ??= GetComponent<Enemy>();
             _spawnTimer = 0f;
         }
 

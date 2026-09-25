@@ -1,91 +1,222 @@
+using System;
+using R3;
 using UnityEngine;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
 using VContainer;
 
 namespace _Project.UI.RunStatus
 {
     /// <summary>
-    /// 将玩家耐力绑定到三层 UGUI Slider：底槽、当前值和延迟追随层。
-    /// 三个 Slider 的尺寸、颜色和层级由 Unity Inspector 中的 UI 布置决定。
+    /// 将玩家耐力显示为背景轨道、连续当前填充和逐段追随填充。
+    /// 当前填充保留精确值，追随填充按 20 段逐段追赶耐力下降后的目标值。
     /// </summary>
     public sealed class StaminaBarView : MonoBehaviour
     {
-        [Header("三层 Slider")]
-        [SerializeField] private Slider _baseLayer;
-        [SerializeField] private Slider _delayedLayer;
-        [SerializeField] private Slider _currentLayer;
+        private const int DisplaySegmentCount = 20;
+        private const float SegmentInterval = 1f / DisplaySegmentCount;
+
+        [Header("耐力条视觉层")]
+        [FormerlySerializedAs("_baseLayer")]
+        [Tooltip("始终显示完整耐力范围的背景轨道。")]
+        [SerializeField] private Slider _backgroundTrack;
+        [FormerlySerializedAs("_delayedLayer")]
+        [Tooltip("按分段逐步追赶当前填充的填充层。")]
+        [SerializeField] private Slider _trailingFill;
+        [FormerlySerializedAs("_currentLayer")]
+        [Tooltip("显示精确当前耐力值的填充层。")]
+        [SerializeField] private Slider _currentFill;
 
         [Header("表现")]
-        [Tooltip("延迟层每秒追随目标值的归一化速度。")]
-        [SerializeField, Min(0f)] private float _delayedFollowSpeed = 3f;
+        [FormerlySerializedAs("_delayedFollowSpeed")]
+        [Tooltip("耐力下降时，追随填充每秒跨越的分段数量。")]
+        [SerializeField, Min(0f)] private float _trailingFillSpeed = 4f;
 
         [Inject] private StaminaController _stamina;
 
-        private float _targetNormalized;
-        private bool _subscribed;
-        private bool _initialized;
+        private int _targetSegment;
+        private int _displayedSegment;
+        private float _segmentTimer;
+        private float _lastNormalizedValue;
+        private bool _hasCurrentValue;
+        private bool _isReady;
+        private IDisposable _staminaSubscription;
 
         private void Start()
         {
-            if (!HasAllLayers())
+            if (!HasRequiredLayers())
             {
-                Debug.LogWarning("[StaminaBarView] 底槽、延迟层和当前层都必须绑定 Slider。", this);
+                Debug.LogWarning(
+                    "[StaminaBarView] 背景轨道、追随填充和当前填充都必须绑定 Slider。",
+                    this);
+
+                enabled = false;
                 return;
             }
 
             if (_stamina == null)
             {
-                Debug.LogWarning("[StaminaBarView] 未注入 StaminaController。", this);
+                Debug.LogWarning(
+                    "[StaminaBarView] 未注入 StaminaController。",
+                    this);
+
+                enabled = false;
                 return;
             }
 
-            ConfigureLayer(_baseLayer);
-            ConfigureLayer(_delayedLayer);
-            ConfigureLayer(_currentLayer);
+            ConfigureLayer(_backgroundTrack);
+            ConfigureLayer(_trailingFill);
+            ConfigureLayer(_currentFill);
+            _backgroundTrack.SetValueWithoutNotify(1f);
+            _isReady = true;
 
-            _stamina.OnStaminaChanged += HandleStaminaChanged;
-            _subscribed = true;
-            _initialized = false;
-            HandleStaminaChanged(_stamina.currentStamina, _stamina.maxStamina);
+            _staminaSubscription = _stamina.CurrentStamina.Subscribe(
+                HandleStaminaChanged);
         }
 
         private void Update()
         {
-            if (_delayedLayer == null)
+            if (!_isReady || _displayedSegment == _targetSegment)
+            {
                 return;
+            }
 
-            float speed = Mathf.Max(0f, _delayedFollowSpeed) * Time.deltaTime;
-            _delayedLayer.value = Mathf.MoveTowards(_delayedLayer.value, _targetNormalized, speed);
+            AdvanceFollow(Time.deltaTime);
         }
 
         private void OnDestroy()
         {
-            if (_subscribed && _stamina != null)
-                _stamina.OnStaminaChanged -= HandleStaminaChanged;
+            _staminaSubscription?.Dispose();
+            _staminaSubscription = null;
         }
 
-        private void HandleStaminaChanged(float currentStamina, float maximumStamina)
+        private void HandleStaminaChanged(float currentStamina)
         {
-            float normalized = maximumStamina > 0f
-                ? Mathf.Clamp01(currentStamina / maximumStamina)
-                : 0f;
+            float normalizedValue = NormalizeValue(
+                currentStamina,
+                _stamina.maxStamina);
+            int targetSegment = GetTargetSegment(normalizedValue);
 
-            _targetNormalized = normalized;
-            _currentLayer.value = normalized;
+            _currentFill.SetValueWithoutNotify(normalizedValue);
 
-            // 首次刷新时两层重合；之后延迟层才表现出追随效果。
-            if (!_initialized)
+            if (!_hasCurrentValue)
             {
-                _delayedLayer.value = normalized;
-                _initialized = true;
+                _hasCurrentValue = true;
+                _lastNormalizedValue = normalizedValue;
+                _targetSegment = targetSegment;
+                _displayedSegment = targetSegment;
+                _segmentTimer = 0f;
+                ApplyTrailingValue();
+                return;
             }
 
-            _baseLayer.value = 1f;
+            bool isRecovering = normalizedValue > _lastNormalizedValue;
+            _lastNormalizedValue = normalizedValue;
+
+            if (isRecovering)
+            {
+                _targetSegment = targetSegment;
+                _displayedSegment = targetSegment;
+                _segmentTimer = 0f;
+                ApplyTrailingValue();
+                return;
+            }
+
+            if (targetSegment != _targetSegment)
+            {
+                _targetSegment = targetSegment;
+                _segmentTimer = 0f;
+            }
         }
 
-        private bool HasAllLayers()
+        private void AdvanceFollow(float deltaTime)
         {
-            return _baseLayer != null && _delayedLayer != null && _currentLayer != null;
+            if (_displayedSegment == _targetSegment)
+            {
+                _segmentTimer = 0f;
+                return;
+            }
+
+            if (float.IsNaN(deltaTime) ||
+                float.IsInfinity(deltaTime) ||
+                deltaTime <= 0f)
+            {
+                return;
+            }
+
+            float speed = NormalizeSpeed(_trailingFillSpeed);
+            if (speed <= 0f)
+            {
+                return;
+            }
+
+            _segmentTimer += deltaTime;
+            float segmentDuration = 1f / speed;
+            while (_segmentTimer >= segmentDuration &&
+                   _displayedSegment != _targetSegment)
+            {
+                _segmentTimer -= segmentDuration;
+                int direction = _displayedSegment < _targetSegment ? 1 : -1;
+                _displayedSegment += direction;
+                ApplyTrailingValue();
+            }
+
+            if (_displayedSegment == _targetSegment)
+            {
+                _segmentTimer = 0f;
+            }
+        }
+
+        private void ApplyTrailingValue()
+        {
+            _trailingFill.SetValueWithoutNotify(
+                _displayedSegment * SegmentInterval);
+        }
+
+        private static float NormalizeValue(
+            float currentStamina,
+            float maximumStamina)
+        {
+            if (float.IsNaN(currentStamina) ||
+                float.IsInfinity(currentStamina) ||
+                float.IsNaN(maximumStamina) ||
+                float.IsInfinity(maximumStamina) ||
+                maximumStamina <= 0f)
+            {
+                return 0f;
+            }
+
+            return Mathf.Clamp01(currentStamina / maximumStamina);
+        }
+
+        private static float NormalizeSpeed(float speed)
+        {
+            if (float.IsNaN(speed) || float.IsInfinity(speed))
+            {
+                return 0f;
+            }
+
+            return Mathf.Max(0f, speed);
+        }
+
+        private static int GetTargetSegment(float normalizedValue)
+        {
+            if (normalizedValue <= 0f)
+            {
+                return 0;
+            }
+
+            return Mathf.Clamp(
+                Mathf.CeilToInt(normalizedValue * DisplaySegmentCount),
+                0,
+                DisplaySegmentCount);
+        }
+
+        private bool HasRequiredLayers()
+        {
+            return _backgroundTrack != null &&
+                   _trailingFill != null &&
+                   _currentFill != null;
         }
 
         private static void ConfigureLayer(Slider layer)

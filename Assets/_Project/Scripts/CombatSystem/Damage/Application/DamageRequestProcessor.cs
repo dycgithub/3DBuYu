@@ -1,12 +1,16 @@
+using System;
 using Interfaces;
 
 namespace CombatSystem
 {
     /// <summary>
-    /// 统一提交伤害请求；目标必须实现完整的伤害请求接收契约，不提供旧式回退。
+    /// 统一提交伤害请求，并发布实际扣血结果。
     /// </summary>
-    public sealed class DamageRequestProcessor : IDamageRequestProcessor
+    public sealed class DamageRequestProcessor : IDamageRequestProcessor, IDamageEventSource
     {
+        /// <summary>目标实际扣除生命后触发。</summary>
+        public event Action<DamageEvent> DamageApplied;
+
         /// <summary>先验证完整目标契约和存活状态，再处理一次伤害请求。</summary>
         public bool TryApplyDamage(IDamageable target, in DamageRequest request, out DamageResult result)
         {
@@ -20,7 +24,13 @@ namespace CombatSystem
             }
 
             result = receiver.ReceiveDamageRequest(request);
-            return result.WasApplied;
+            if (!result.WasApplied)
+            {
+                return false;
+            }
+
+            DamageApplied?.Invoke(new DamageEvent(target, request, result));
+            return true;
         }
     }
 }

@@ -15,12 +15,12 @@ namespace EnemySystem.Components
     {
         [Inject] private IEnergyService _energy;
         [Inject] private IGameEventService _gameEventService;
-        [Inject] private IPointsFlyEffectService _pointsFlyEffect;
         [Inject] private ICombatPhaseService _combatPhase;
 
         private Enemy _enemy;
         private bool _subscribed;
         private bool _rewarded;
+        private bool _dependencyErrorReported;
 
         /// <summary>获取当前敌人配置中的能量奖励。</summary>
         public float EnergyReward
@@ -54,6 +54,7 @@ namespace EnemySystem.Components
         private void OnEnable()
         {
             _rewarded = false;
+            _dependencyErrorReported = false;
             _enemy ??= GetComponent<Enemy>();
 
             if (_enemy != null && !_subscribed)
@@ -81,26 +82,37 @@ namespace EnemySystem.Components
         {
             if (_rewarded ||
                 enemy == null ||
-                enemy.DeathCause == EnemyDeathCause.Consumed ||
-                enemy.Attributes == null ||
-                enemy.Attributes.rewardMode == EnemyRewardMode.Ignore)
+                enemy.DeathCause == EnemyDeathCause.Consumed)
+            {
+                return;
+            }
+
+            if (enemy.Attributes == null)
+            {
+                Debug.LogError(
+                    $"[EnemyDeathRewardComponent] {name}: 未配置 EnemyAttributesSO，无法提交死亡奖励。",
+                    this);
+                return;
+            }
+
+            if (enemy.Attributes.rewardMode == EnemyRewardMode.Ignore)
+            {
+                return;
+            }
+
+            if (!ValidateDependencies())
             {
                 return;
             }
 
             _rewarded = true;
-            if (_combatPhase != null && !_combatPhase.CanPerformCombatActions)
+            if (!_combatPhase.CanPerformCombatActions)
             {
                 return;
             }
 
-            _energy?.AddEnergy(EnergyReward);
-            int awardedPoints = _gameEventService != null
-                ? _gameEventService.NotifyEnemyKilled(PointsReward)
-                : 0;
-            _pointsFlyEffect?.Publish(awardedPoints, enemy != null
-                ? enemy.transform.position
-                : transform.position);
+            _energy.AddEnergy(EnergyReward);
+            _gameEventService.NotifyEnemyKilled(PointsReward);
         }
 
         /// <summary>实体主动重置时允许下一次死亡再次提交奖励。</summary>
@@ -124,6 +136,29 @@ namespace EnemySystem.Components
                 _enemy.ReuseRequested += HandleReuseRequested;
                 _subscribed = true;
             }
+        }
+
+        /// <summary>检查奖励链所需的战斗期服务是否已由 VContainer 注入。</summary>
+        /// <returns>依赖完整时返回 true。</returns>
+        private bool ValidateDependencies()
+        {
+            if (_energy != null &&
+                _gameEventService != null &&
+                _combatPhase != null)
+            {
+                return true;
+            }
+
+            if (!_dependencyErrorReported)
+            {
+                Debug.LogError(
+                    $"[EnemyDeathRewardComponent] {name}: " +
+                    "需要 IEnergyService、IGameEventService 和 ICombatPhaseService。",
+                    this);
+                _dependencyErrorReported = true;
+            }
+
+            return false;
         }
     }
 }

@@ -39,6 +39,9 @@ namespace Play
             set => targetingMode = value;
         }
 
+        /// <summary>当前用于自动攻击目标查询的球形半径。</summary>
+        public float DetectionRadius => _detectionRadius;
+
         public int PortCount => _targets.Length;
 
         private float EffectiveDetectionRadius => _detectionRadius;

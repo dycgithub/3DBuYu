@@ -14,6 +14,9 @@ namespace CombatSystem
         /// <summary>攻击伤害乘数。</summary>
         public float DamageMultiplier { get; }
 
+        /// <summary>本次攻击能量消耗倍率。</summary>
+        public float EnergyCostMultiplier { get; }
+
         /// <summary>攻击最大距离乘数。</summary>
         public float RangeMultiplier { get; }
 
@@ -54,6 +57,7 @@ namespace CombatSystem
             ProjectileProfileSO projectileProfile,
             float additiveDamageBonus,
             float damageMultiplier,
+            float energyCostMultiplier,
             float rangeMultiplier,
             float attacksPerSecond,
             float collisionRadius,
@@ -66,6 +70,7 @@ namespace CombatSystem
             ProjectileProfile = projectileProfile;
             AdditiveDamageBonus = additiveDamageBonus;
             DamageMultiplier = damageMultiplier;
+            EnergyCostMultiplier = energyCostMultiplier;
             RangeMultiplier = rangeMultiplier;
             AttacksPerSecond = attacksPerSecond;
             CollisionRadius = collisionRadius;

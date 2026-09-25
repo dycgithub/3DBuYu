@@ -1,7 +1,9 @@
+using System.Collections.Generic;
 using CombatSystem;
+using EnemySystem.AreaEffect;
 using Interfaces;
 using Services;
-using SpatialSystem.Bridge;
+using SpatialIndexing;
 using UnityEngine;
 using Utils;
 using VContainer;
@@ -9,118 +11,343 @@ using VContainer;
 namespace EnemySystem.Components
 {
     /// <summary>
-    /// 周期性范围减速或治疗效果。
-    /// 同一组件通过枚举区分三种目标规则，避免复制空间查询流程。
+    /// 为范围效果源保存配置和目标缓存。
+    /// <para>实际调度由 EnemyAreaEffectService 统一驱动，本组件不再拥有逐帧 Update。</para>
+    /// <para>范围只决定可以新增哪些目标；已施加的 Buff 按自身持续时间独立结束。</para>
     /// </summary>
     [DisallowMultipleComponent]
     [RequireComponent(typeof(Enemy))]
     public sealed class EnemyAreaEffectComponent : MonoBehaviour, IPooledObject, IEnemyActivationListener
     {
+        private const int MaximumAffectedTargets = 50;
+
         [Inject] private ISpatialQueryService _spatialService;
         [Inject] private IPlayerCombatTarget _playerTarget;
+        [Inject] private EnemyAreaEffectService _areaEffectService;
+
+        private readonly List<IDamageable> _candidateTargets = new(MaximumAffectedTargets);
+        private readonly List<AffectedTarget> _affectedTargets = new(MaximumAffectedTargets);
 
         private Enemy _enemy;
         private BuffDefinitionSO _runtimeSlowBuff;
-        private float _tickTimer;
+        private BuffDefinitionSO _effectBuff;
+        private EnemyAreaEffectType _effectType;
+        private float _effectRadius;
+        private float _effectRadiusSquared;
+        private float _queryInterval;
+        private float _queryTimer;
+        private int _candidateCursor;
+        private bool _configurationCached;
+        private bool _registered;
 
-        /// <summary>缓存宿主。</summary>
-        private void Awake()
+        private struct AffectedTarget
         {
-            _enemy = GetComponent<Enemy>();
+            public IDamageable Target;
+            public float ExpireAt;
         }
 
-        /// <summary>启用时立即允许第一次结算。</summary>
+        /// <summary>缓存宿主敌人并清空范围状态。</summary>
+        private void Awake()
+        {
+            TryGetComponent(out _enemy);
+            ResetState();
+        }
+
+        /// <summary>启用时允许立即刷新候选，并尝试登记到集中调度器。</summary>
         private void OnEnable()
         {
-            _tickTimer = 0f;
+            ResetState();
+            TryRegister();
+        }
+
+        /// <summary>禁用时注销调度器并清理本次租借的候选状态。</summary>
+        private void OnDisable()
+        {
+            Unregister();
+            ResetState();
         }
 
         /// <summary>释放本组件创建的运行时减速定义。</summary>
         private void OnDestroy()
         {
-            if (_runtimeSlowBuff != null)
-            {
-                if (Application.isPlaying)
-                {
-                    Destroy(_runtimeSlowBuff);
-                }
-                else
-                {
-                    DestroyImmediate(_runtimeSlowBuff);
-                }
-
-                _runtimeSlowBuff = null;
-            }
-        }
-
-        /// <summary>按范围效果配置周期结算。</summary>
-        private void Update()
-        {
-            if (_enemy == null || _enemy.IsDead || _enemy.Attributes == null)
+            Unregister();
+            if (_runtimeSlowBuff == null)
             {
                 return;
             }
 
-            _tickTimer -= Time.deltaTime;
-            if (_tickTimer > 0f)
+            if (Application.isPlaying)
+            {
+                Destroy(_runtimeSlowBuff);
+            }
+            else
+            {
+                DestroyImmediate(_runtimeSlowBuff);
+            }
+
+            _runtimeSlowBuff = null;
+        }
+
+        /// <summary>
+        /// 处理一个范围源的当前帧预算。
+        /// </summary>
+        /// <param name="deltaTime">当前帧经过的秒数。</param>
+        internal void ProcessFrame(float deltaTime)
+        {
+            if (_enemy == null)
+            {
+                TryGetComponent(out _enemy);
+            }
+
+            if (!isActiveAndEnabled || _enemy == null || _enemy.IsDead)
             {
                 return;
             }
 
-            float interval = Mathf.Max(0.01f, _enemy.Attributes.areaEffectTickInterval);
-            _tickTimer = interval;
-            ApplyEffect(interval);
+            CacheConfiguration();
+            if (_effectBuff == null)
+            {
+                return;
+            }
+
+            PruneAffectedTargets();
+            _queryTimer -= Mathf.Max(0f, deltaTime);
+            if (_queryTimer <= 0f)
+            {
+                RefreshCandidates();
+                _queryTimer = _queryInterval - Mathf.Max(0f, deltaTime);
+            }
+
+            TryApplyNextTarget();
         }
 
-        /// <summary>执行一次范围效果。</summary>
-        private void ApplyEffect(float interval)
+        /// <summary>对象池租借时重置目标游标和范围状态。</summary>
+        public void OnRentFromPool()
         {
+            ResetState();
+        }
+
+        /// <summary>对象池归还时重置目标游标和范围状态。</summary>
+        public void OnReturnToPool()
+        {
+            ResetState();
+        }
+
+        /// <summary>补做宿主激活后的依赖缓存和调度登记。</summary>
+        void IEnemyActivationListener.OnEnemyActivationReady()
+        {
+            if (_enemy == null)
+            {
+                TryGetComponent(out _enemy);
+            }
+
+            TryRegister();
+        }
+
+        /// <summary>登记当前范围源，兼容注入先后顺序和对象池重复激活。</summary>
+        private void TryRegister()
+        {
+            if (_enemy == null)
+            {
+                TryGetComponent(out _enemy);
+            }
+
+            if (!isActiveAndEnabled || _areaEffectService == null || _enemy == null ||
+                _enemy.IsDead || _enemy.Attributes == null)
+            {
+                return;
+            }
+
+            CacheConfiguration();
+            if (!_registered)
+            {
+                _areaEffectService.Register(this);
+                _registered = true;
+            }
+        }
+
+        /// <summary>从集中调度器注销当前范围源。</summary>
+        private void Unregister()
+        {
+            if (_registered)
+            {
+                _areaEffectService?.Unregister(this);
+                _registered = false;
+            }
+        }
+
+        /// <summary>读取一次本次租借的范围参数和对应 Buff。</summary>
+        private void CacheConfiguration()
+        {
+            if (_configurationCached || _enemy == null || _enemy.Attributes == null)
+            {
+                return;
+            }
+
             EnemyAttributesSO attributes = _enemy.Attributes;
-            if (_spatialService != null)
-            {
-                var targets = _spatialService.QueryRadius(
-                    transform.position,
-                    Mathf.Max(0f, attributes.areaEffectRadius),
-                    SpatialRegistry.LAYER_ENEMY);
-                for (int index = 0; index < targets.Count; index++)
-                {
-                    ApplyToEnemy(targets[index], attributes, interval);
-                }
-            }
-
-            if (attributes.areaEffectType == EnemyAreaEffectType.HealAll &&
-                IsPlayerInRange(attributes.areaEffectRadius))
-            {
-                Heal(_playerTarget, attributes.areaHealPerSecond * interval);
-            }
-            else if (attributes.areaEffectType == EnemyAreaEffectType.Slow &&
-                     IsPlayerInRange(attributes.areaEffectRadius))
-            {
-                _playerTarget?.ApplyBuff(GetSlowBuff(attributes), GetInstanceID());
-            }
+            _effectType = attributes.areaEffectType;
+            _effectRadius = Mathf.Max(0f, attributes.areaEffectRadius);
+            _effectRadiusSquared = _effectRadius * _effectRadius;
+            _queryInterval = Mathf.Max(0.01f, attributes.areaEffectTickInterval);
+            _effectBuff = ResolveEffectBuff(attributes);
+            _configurationCached = true;
         }
 
-        /// <summary>将效果应用到一个敌人目标。</summary>
-        private void ApplyToEnemy(IDamageable target, EnemyAttributesSO attributes, float interval)
+        /// <summary>按范围模式返回减速或持续治疗 Buff。</summary>
+        private BuffDefinitionSO ResolveEffectBuff(EnemyAttributesSO attributes)
         {
-            if (target is not Enemy enemy || enemy.IsDead)
+            return _effectType == EnemyAreaEffectType.Slow
+                ? GetSlowBuff(attributes)
+                : attributes.areaHealBuff;
+        }
+
+        /// <summary>刷新当前范围内的敌人候选，结果写入本组件的复用缓存。</summary>
+        private void RefreshCandidates()
+        {
+            _candidateTargets.Clear();
+            _candidateCursor = 0;
+            if (_spatialService == null)
             {
                 return;
             }
 
-            switch (attributes.areaEffectType)
+            List<IDamageable> targets = _spatialService.QueryRadius(
+                transform.position,
+                _effectRadius,
+                SpatialLayers.Enemy);
+            int targetCount = Mathf.Min(MaximumAffectedTargets, targets.Count);
+            for (int index = 0; index < targetCount; index++)
             {
-                case EnemyAreaEffectType.Slow:
-                    enemy.ApplyBuff(GetSlowBuff(attributes), GetInstanceID());
-                    break;
-                case EnemyAreaEffectType.HealAll:
-                case EnemyAreaEffectType.HealEnemies:
-                    Heal(enemy, attributes.areaHealPerSecond * interval);
-                    break;
+                IDamageable target = targets[index];
+                if (target != null)
+                {
+                    _candidateTargets.Add(target);
+                }
             }
         }
 
-        /// <summary>返回按当前敌人配置生成的运行时减速定义。</summary>
+        /// <summary>扫描候选并在本帧成功施加一个 Buff 后停止。</summary>
+        private void TryApplyNextTarget()
+        {
+            if (_affectedTargets.Count < MaximumAffectedTargets &&
+                TryApplyToEnemy())
+            {
+                return;
+            }
+
+            TryApplyToPlayer();
+        }
+
+        /// <summary>从游标开始跳过已有同类 Buff 的敌人，直到成功施加一次。</summary>
+        private bool TryApplyToEnemy()
+        {
+            int count = _candidateTargets.Count;
+            if (count == 0)
+            {
+                return false;
+            }
+
+            int start = _candidateCursor % count;
+            for (int offset = 0; offset < count; offset++)
+            {
+                int index = (start + offset) % count;
+                IDamageable target = _candidateTargets[index];
+                if (!IsTargetInRange(target) || target is not IBuffReceiver receiver)
+                {
+                    continue;
+                }
+
+                if (!receiver.TryApplyBuffIfAbsent(_effectBuff, GetInstanceID()))
+                {
+                    continue;
+                }
+
+                RecordAffectedTarget(target);
+                _candidateCursor = (index + 1) % count;
+                return true;
+            }
+
+            _candidateCursor = (start + 1) % count;
+            return false;
+        }
+
+        /// <summary>按当前模式尝试给范围内玩家施加一次 Buff。</summary>
+        private bool TryApplyToPlayer()
+        {
+            if (_effectType == EnemyAreaEffectType.HealEnemies ||
+                !IsTargetInRange(_playerTarget) ||
+                _playerTarget is not IBuffReceiver receiver)
+            {
+                return false;
+            }
+
+            return receiver.TryApplyBuffIfAbsent(_effectBuff, GetInstanceID());
+        }
+
+        /// <summary>记录一个本来源仍占用的受影响目标槽位。</summary>
+        private void RecordAffectedTarget(IDamageable target)
+        {
+            float expireAt = GetExpireAt();
+            for (int index = 0; index < _affectedTargets.Count; index++)
+            {
+                if (_affectedTargets[index].Target != target)
+                {
+                    continue;
+                }
+
+                _affectedTargets[index] = new AffectedTarget
+                {
+                    Target = target,
+                    ExpireAt = expireAt
+                };
+                return;
+            }
+
+            _affectedTargets.Add(new AffectedTarget
+            {
+                Target = target,
+                ExpireAt = expireAt
+            });
+        }
+
+        /// <summary>移除死亡、销毁或已自然过期的受影响目标。</summary>
+        private void PruneAffectedTargets()
+        {
+            float currentTime = Time.time;
+            for (int index = _affectedTargets.Count - 1; index >= 0; index--)
+            {
+                AffectedTarget affected = _affectedTargets[index];
+                if (!IsAlive(affected.Target) ||
+                    (affected.ExpireAt < float.PositiveInfinity && currentTime >= affected.ExpireAt))
+                {
+                    _affectedTargets.RemoveAt(index);
+                }
+            }
+        }
+
+        /// <summary>判断目标存活且仍在当前范围内。</summary>
+        private bool IsTargetInRange(IDamageable target)
+        {
+            return IsAlive(target) &&
+                (target.Position - transform.position).sqrMagnitude <= _effectRadiusSquared;
+        }
+
+        /// <summary>计算本次受影响目标槽位的自然过期时间。</summary>
+        private float GetExpireAt()
+        {
+            float duration = _effectBuff != null ? _effectBuff.DurationSeconds : 0f;
+            return duration > 0f ? Time.time + duration : float.PositiveInfinity;
+        }
+
+        /// <summary>判断目标接口引用仍对应有效的 Unity 对象。</summary>
+        private static bool IsAlive(IDamageable target)
+        {
+            return target != null &&
+                (!(target is Object unityObject) || unityObject != null) &&
+                target.IsAlive;
+        }
+
+        /// <summary>按当前敌人配置生成一个可调整倍率的运行时减速定义。</summary>
         private BuffDefinitionSO GetSlowBuff(EnemyAttributesSO attributes)
         {
             if (attributes == null || attributes.areaSlowBuff == null)
@@ -133,8 +360,10 @@ namespace EnemySystem.Components
                 _runtimeSlowBuff = ScriptableObject.CreateInstance<BuffDefinitionSO>();
                 _runtimeSlowBuff.name = $"{name}_SlowBuff";
                 _runtimeSlowBuff.ModifierType = attributes.areaSlowBuff.ModifierType;
+                _runtimeSlowBuff.StackGroupId = attributes.areaSlowBuff.StackGroupId;
                 _runtimeSlowBuff.Polarity = attributes.areaSlowBuff.Polarity;
                 _runtimeSlowBuff.DurationSeconds = attributes.areaSlowBuff.DurationSeconds;
+                _runtimeSlowBuff.HealingPerSecond = attributes.areaSlowBuff.HealingPerSecond;
                 _runtimeSlowBuff.StackPolicy = attributes.areaSlowBuff.StackPolicy;
                 _runtimeSlowBuff.MaximumStackCount = attributes.areaSlowBuff.MaximumStackCount;
                 _runtimeSlowBuff.VisualEffectPrefab = attributes.areaSlowBuff.VisualEffectPrefab;
@@ -147,40 +376,15 @@ namespace EnemySystem.Components
             return _runtimeSlowBuff;
         }
 
-        /// <summary>给可治疗目标恢复资源。</summary>
-        private static void Heal(IHealable target, float amount)
+        /// <summary>清除本次租借的候选、受影响目标和时间状态。</summary>
+        private void ResetState()
         {
-            if (target != null)
-            {
-                target.Heal(amount);
-            }
-        }
-
-        /// <summary>判断玩家是否在范围内。</summary>
-        private bool IsPlayerInRange(float radius)
-        {
-            return _playerTarget != null &&
-                _playerTarget.IsAlive &&
-                _playerTarget.Transform != null &&
-                Vector3.Distance(transform.position, _playerTarget.Transform.position) <= radius;
-        }
-
-        /// <summary>对象池租借时清除计时状态。</summary>
-        public void OnRentFromPool()
-        {
-            _tickTimer = 0f;
-        }
-
-        /// <summary>对象池归还时清除计时状态。</summary>
-        public void OnReturnToPool()
-        {
-            _tickTimer = 0f;
-        }
-
-        /// <summary>补做宿主激活后的依赖缓存。</summary>
-        void IEnemyActivationListener.OnEnemyActivationReady()
-        {
-            _enemy ??= GetComponent<Enemy>();
+            _candidateTargets.Clear();
+            _affectedTargets.Clear();
+            _candidateCursor = 0;
+            _queryTimer = 0f;
+            _configurationCached = false;
+            _effectBuff = null;
         }
     }
 }

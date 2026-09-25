@@ -20,6 +20,7 @@ namespace EnemySystem.Components
 
         [Inject] private IEffectService _effectService;
         [Inject] private ISpatialQueryService _spatialService;
+        [Inject] private IDamageRequestProcessor _damageProcessor;
         [Inject] private IPlayerCombatTarget _playerTarget;
 
         private Enemy _enemy;
@@ -63,7 +64,9 @@ namespace EnemySystem.Components
 
             EnemyAttributesSO attributes = enemy.Attributes;
             float radius = attributes != null ? Mathf.Max(0f, attributes.explosionRadius) : 0f;
-            float damage = attributes != null ? Mathf.Max(0f, attributes.explosionDamage) : 0f;
+            float damage = attributes != null
+                ? Mathf.Max(0f, attributes.explosionDamage) * enemy.GetAttackDamageMultiplier()
+                : 0f;
             if (radius > 0f && damage > 0f)
             {
                 if (_spatialService != null)
@@ -71,7 +74,7 @@ namespace EnemySystem.Components
                     var targets = _spatialService.QueryRadius(
                         transform.position,
                         radius,
-                        SpatialSystem.Bridge.SpatialRegistry.LAYER_ENEMY);
+                        SpatialIndexing.SpatialLayers.Enemy);
                     for (int index = 0; index < targets.Count; index++)
                     {
                         if (targets[index] is not Enemy targetEnemy || targetEnemy != enemy)
@@ -95,19 +98,22 @@ namespace EnemySystem.Components
         /// <summary>提交一次范围伤害请求。</summary>
         private void ApplyDamage(IDamageable target, float damage)
         {
-            if (target is not IDamageRequestReceiver receiver || !target.IsAliveAndValid())
+            if (_damageProcessor == null || !target.IsAliveAndValid())
             {
                 return;
             }
 
-            receiver.ReceiveDamageRequest(new DamageRequest
-            {
-                SourceInstanceId = _enemy != null ? _enemy.GetInstanceID() : 0,
-                DamageAmount = damage,
-                DamageType = DamageType.Physical,
-                HitPosition = target.Position,
-                HitNormal = Vector3.up
-            });
+            _damageProcessor.TryApplyDamage(
+                target,
+                new DamageRequest
+                {
+                    SourceInstanceId = _enemy != null ? _enemy.GetInstanceID() : 0,
+                    DamageAmount = damage,
+                    DamageType = DamageType.Physical,
+                    HitPosition = target.Position,
+                    HitNormal = Vector3.up
+                },
+                out _);
         }
 
         /// <summary>响应宿主广播，补做死亡事件订阅。</summary>

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using CombatSystem;
+using R3;
 using UnityEngine;
 using Utils;
 
@@ -18,6 +19,10 @@ namespace EnemySystem.Components
         private Enemy _enemy;
         private float _currentHealth;
         private float _maxHealth;
+        private readonly ReactiveProperty<float> _health01 = new(0f);
+
+        /// <summary>当前生命占最大生命的比例，变化时通过 R3 推送。</summary>
+        internal ReadOnlyReactiveProperty<float> Health01 => _health01;
 
         /// <summary>当前生命值。</summary>
         internal float CurrentHealth => _currentHealth;
@@ -81,6 +86,7 @@ namespace EnemySystem.Components
 
             _maxHealth = attributes.baseHealth * Mathf.Max(0.01f, healthMultiplier);
             _currentHealth = _maxHealth;
+            PublishHealth01();
         }
 
         /// <summary>
@@ -127,7 +133,7 @@ namespace EnemySystem.Components
                 return InvalidResult();
             }
 
-            float damageTakenMultiplier = _enemy.GetDamageTakenMultiplier(request.DamageType);
+            float damageTakenMultiplier = _enemy.GetDamageTakenMultiplier();
             float effectiveDamage = Mathf.Max(0f, finalDamage * damageTakenMultiplier);
             if (effectiveDamage <= 0f)
             {
@@ -135,6 +141,7 @@ namespace EnemySystem.Components
             }
 
             _currentHealth -= effectiveDamage;
+            PublishHealth01();
             _enemy.NotifyDamageTaken(effectiveDamage);
 
             bool wasKilled = _currentHealth <= 0f;
@@ -185,6 +192,7 @@ namespace EnemySystem.Components
             _currentHealth = Mathf.Min(
                 _maxHealth,
                 _currentHealth + Mathf.Max(0f, amount));
+            PublishHealth01();
             return _currentHealth - previousHealth;
         }
 
@@ -199,6 +207,7 @@ namespace EnemySystem.Components
             float absorbed = Mathf.Max(0f, amount);
             _maxHealth += absorbed;
             _currentHealth += absorbed;
+            PublishHealth01();
             return absorbed;
         }
 
@@ -206,6 +215,13 @@ namespace EnemySystem.Components
         internal void SetHealthToZero()
         {
             _currentHealth = 0f;
+            PublishHealth01();
+        }
+
+        /// <summary>销毁组件时释放 R3 状态。</summary>
+        private void OnDestroy()
+        {
+            _health01.Dispose();
         }
 
         /// <summary>重置生命值和本组件持有的防御拦截器。</summary>
@@ -220,6 +236,19 @@ namespace EnemySystem.Components
         {
             _currentHealth = 0f;
             _maxHealth = 0f;
+            PublishHealth01();
+        }
+
+        /// <summary>根据当前生命和最大生命计算并推送归一化状态。</summary>
+        private void PublishHealth01()
+        {
+            float health01 = _maxHealth > 0f
+                ? Mathf.Clamp01(_currentHealth / _maxHealth)
+                : 0f;
+            if (!Mathf.Approximately(_health01.Value, health01))
+            {
+                _health01.Value = health01;
+            }
         }
 
         /// <summary>创建目标已失效的结果。</summary>

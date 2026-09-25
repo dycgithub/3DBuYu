@@ -22,18 +22,21 @@ namespace _Project.UI.Card
         private float _nextRefresh;
         private bool _availabilityDirty;
         private bool _subscribed;
+        private bool _constructed;
 
-        /// <summary>接收场景依赖，并为已有共享面板注入同一场景的释放服务。</summary>
+        /// <summary>接收当前 GameLoop 子容器依赖；共享面板由场景自动注入。</summary>
         [Inject]
         private void Construct(SkillHand hand, IObjectResolver resolver, SkillActivationService activation)
         {
+            if (_constructed)
+            {
+                return;
+            }
+
             _hand = hand;
             _resolver = resolver;
             _activation = activation;
-            if (actionPanel != null)
-            {
-                _resolver.Inject(actionPanel);
-            }
+            _constructed = true;
             if (isActiveAndEnabled)
             {
                 Subscribe();

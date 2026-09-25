@@ -11,6 +11,8 @@ namespace EffectSystem
         BigExplosion,
         PlayerDamage,
         BulletHit,
-        BulletExpired
+        BulletExpired,
+        EnemySpawn = 9,
+        TransmitterFire = 10
     }
 }

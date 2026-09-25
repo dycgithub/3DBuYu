@@ -1,26 +1,39 @@
-using System.Collections.Generic;
 using Unity.Burst;
 using Unity.Burst.Intrinsics;
 using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
-using Unity.Mathematics;
 using Unity.Transforms;
 using UnityEngine;
 using UnityEngine.Jobs;
+using SpatialIndexing;
 
 namespace FlockingSystem.ECS
 {
+    /// <summary>
+    /// 把模拟阶段生成的 ECS 姿态提交给 LocalTransform 和托管 Transform。
+    /// <para>Transform 映射只由槽位数组维护，交换删除时不额外保存重复的 slot 列表。</para>
+    /// </summary>
     [UpdateInGroup(typeof(SimulationSystemGroup))]
     [UpdateAfter(typeof(EnemyFlockSimulationSystem))]
     public partial class EnemyFlockCommitSystem : SystemBase
     {
+        private const int InvalidSlot = -1;
+
+        /// <summary>同时包含下一姿态和活动标记的 ECS 代理查询。</summary>
         private EntityQuery _query;
+
+        /// <summary>由提交 Job 并行写入的托管 Transform 集合。</summary>
         private TransformAccessArray _transforms;
+
+        /// <summary>TransformAccessArray 索引到群游槽位的映射。</summary>
         private NativeArray<int> _slotsByTransformIndex;
+
+        /// <summary>Transform 是否接收 ECS 姿态。</summary>
         private NativeArray<byte> _activeByTransformIndex;
+
+        /// <summary>按群游槽位保存的中间姿态。</summary>
         private NativeArray<EnemyFlockPose> _poses;
-        private readonly List<int> _slotOrder = new(EnemyFlockLimits.MaximumAgents);
+
         private int _maximumAgents = EnemyFlockLimits.MaximumAgents;
         private ComponentTypeHandle<LocalTransform> _localTransformHandle;
         private ComponentTypeHandle<EnemyFlockNextPose> _nextPoseHandle;
@@ -64,7 +77,6 @@ namespace FlockingSystem.ECS
             {
                 _poses.Dispose();
             }
-            _slotOrder.Clear();
         }
 
         /// <summary>
@@ -78,12 +90,11 @@ namespace FlockingSystem.ECS
             Dependency.Complete();
             if (!target || _transforms.length >= _maximumAgents)
             {
-                return -1;
+                return InvalidSlot;
             }
 
             _transforms.Add(target);
             int transformIndex = _transforms.length - 1;
-            _slotOrder.Add(slot);
             _slotsByTransformIndex[transformIndex] = slot;
             _activeByTransformIndex[transformIndex] = 0;
             return transformIndex;
@@ -125,25 +136,26 @@ namespace FlockingSystem.ECS
             Dependency.Complete();
             if (transformIndex < 0 || transformIndex >= _transforms.length)
             {
-                return -1;
+                return InvalidSlot;
             }
 
             int lastIndex = _transforms.length - 1;
-            int movedSlot = -1;
+            int movedSlot = InvalidSlot;
             if (transformIndex != lastIndex)
             {
-                movedSlot = _slotOrder[lastIndex];
+                movedSlot = _slotsByTransformIndex[lastIndex];
                 _slotsByTransformIndex[transformIndex] = movedSlot;
                 _activeByTransformIndex[transformIndex] = _activeByTransformIndex[lastIndex];
-                _slotOrder[transformIndex] = movedSlot;
             }
 
             _activeByTransformIndex[lastIndex] = 0;
             _transforms.RemoveAtSwapBack(transformIndex);
-            _slotOrder.RemoveAt(lastIndex);
             return movedSlot;
         }
 
+        /// <summary>
+        /// 先写回 ECS LocalTransform 和槽位姿态，再并行同步托管 Transform。
+        /// </summary>
         protected override void OnUpdate()
         {
             if (_transforms.length == 0 || _query.IsEmptyIgnoreFilter)
@@ -169,16 +181,25 @@ namespace FlockingSystem.ECS
                 SlotsByTransformIndex = _slotsByTransformIndex,
                 ActiveByTransformIndex = _activeByTransformIndex,
             }.Schedule(_transforms, Dependency);
+
+            World.GetExistingSystemManaged<SpatialIndexSystem>()?.Service?.InvalidateEnemySnapshot();
         }
     }
 
+    /// <summary>把下一姿态写入 ECS Transform，并按群游槽位保存给托管提交 Job。</summary>
     [BurstCompile]
     internal struct EnemyFlockCommitEntitiesJob : IJobChunk
     {
+        /// <summary>读写实体的 LocalTransform。</summary>
         public ComponentTypeHandle<LocalTransform> LocalTransformHandle;
+
+        /// <summary>读取模拟阶段生成的下一姿态。</summary>
         [ReadOnly] public ComponentTypeHandle<EnemyFlockNextPose> NextPoseHandle;
+
+        /// <summary>读取实体对应的群游槽位。</summary>
         [ReadOnly] public ComponentTypeHandle<EnemyFlockBridgeIndex> BridgeIndexHandle;
 
+        /// <summary>按群游槽位写入姿态，实体之间依靠唯一槽位保证不冲突。</summary>
         [NativeDisableParallelForRestriction]
         public NativeArray<EnemyFlockPose> Poses;
 
@@ -191,7 +212,7 @@ namespace FlockingSystem.ECS
 
             while (enumerator.NextEntityIndex(out int entityIndex))
             {
-                int slot = bridgeIndices[entityIndex].Value;
+                int slot = bridgeIndices[entityIndex].FlockSlot;
                 if ((uint)slot >= EnemyFlockLimits.MaximumAgents)
                 {
                     continue;
@@ -213,11 +234,17 @@ namespace FlockingSystem.ECS
         }
     }
 
+    /// <summary>按 Transform 索引读取槽位姿态并更新托管对象。</summary>
     [BurstCompile]
     internal struct EnemyFlockApplyTransformJob : IJobParallelForTransform
     {
+        /// <summary>按群游槽位读取模拟姿态。</summary>
         [ReadOnly] public NativeArray<EnemyFlockPose> Poses;
+
+        /// <summary>TransformAccessArray 索引到群游槽位的映射。</summary>
         [ReadOnly] public NativeArray<int> SlotsByTransformIndex;
+
+        /// <summary>标记对应 Transform 是否仍由 ECS 控制。</summary>
         [ReadOnly] public NativeArray<byte> ActiveByTransformIndex;
 
         public void Execute(int index, TransformAccess transform)

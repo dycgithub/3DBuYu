@@ -26,6 +26,7 @@ namespace EnemySystem.Components
 
         [Inject] private IEnergyService _energyService;
         [Inject] private IPlayerCombatTarget _playerTarget;
+        [Inject] private IDamageRequestProcessor _damageProcessor;
         [Inject] private ICombatPhaseService _combatPhase;
 
         private readonly Dictionary<int, float> _lastContactTimes = new();
@@ -99,17 +100,33 @@ namespace EnemySystem.Components
             }
 
             _lastContactTimes[playerId] = Time.time;
-            float damage = Mathf.Max(0f, damagePerContact);
+            if (_enemy.GetAttackAllowedMultiplier() <= 0f)
+            {
+                return;
+            }
+
+            float damage = Mathf.Max(0f, damagePerContact) * _enemy.GetAttackDamageMultiplier();
+            if (damage <= 0f)
+            {
+                return;
+            }
             if (_playerTarget != null)
             {
-                _playerTarget.ReceiveDamageRequest(new DamageRequest
+                if (_damageProcessor != null)
                 {
-                    SourceInstanceId = _enemy.GetInstanceID(),
-                    DamageAmount = damage,
-                    DamageType = DamageType.Physical,
-                    HitPosition = other.ClosestPoint(transform.position),
-                    HitNormal = Vector3.up
-                });
+                    _damageProcessor.TryApplyDamage(
+                        _playerTarget,
+                        new DamageRequest
+                        {
+                            SourceInstanceId = _enemy.GetInstanceID(),
+                            DamageAmount = damage,
+                            DamageType = DamageType.Physical,
+                            HitPosition = other.ClosestPoint(transform.position),
+                            HitNormal = Vector3.up
+                        },
+                        out _);
+                }
+
                 return;
             }
 

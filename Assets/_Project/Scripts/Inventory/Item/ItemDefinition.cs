@@ -16,6 +16,7 @@ public class ItemDefinition : ScriptableObject
 
     [Header("表现")]
     [SerializeField] private Sprite icon;
+    [SerializeField] private Sprite boundingBoxImage;
     [SerializeField] private Color color = Color.white;
 
     [Header("网格形状")]
@@ -40,6 +41,9 @@ public class ItemDefinition : ScriptableObject
 
     /// <summary>获取物品图标。</summary>
     public Sprite Icon => icon;
+
+    /// <summary>获取覆盖物品包围盒并由占用形状裁切的图片。</summary>
+    public Sprite BoundingBoxImage => boundingBoxImage;
 
     /// <summary>获取物品在界面中的显示颜色。</summary>
     public Color Color => color;

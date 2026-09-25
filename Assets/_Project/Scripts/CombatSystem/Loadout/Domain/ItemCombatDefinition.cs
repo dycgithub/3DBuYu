@@ -13,6 +13,8 @@ namespace CombatSystem
         [SerializeField] private ProjectileProfileSO transmitterProjectileProfile;
         [SerializeField] private SkillGrant centralSkillGrant;
         [SerializeField] private TransmitterAttackModifierDefinitionSO[] transmitterAttackModifierDefinitions;
+        [Min(0f)] [SerializeField] private float transmitterEnergyCostMultiplier = 1f;
+        [Min(0f)] [SerializeField] private float centralEnergyCostMultiplier = 1f;
 
         private static ItemCombatDefinitionSO _runtimeFallback;
 
@@ -22,6 +24,8 @@ namespace CombatSystem
         public SkillGrant CentralSkillGrant => centralSkillGrant;
         public TransmitterAttackModifierDefinitionSO[] TransmitterAttackModifierDefinitions
             => transmitterAttackModifierDefinitions;
+        public float TransmitterEnergyCostMultiplier => Mathf.Max(0f, transmitterEnergyCostMultiplier);
+        public float CentralEnergyCostMultiplier => Mathf.Max(0f, centralEnergyCostMultiplier);
 
         public bool AppliesToCentralLoadout
             => combatScope == CombatScope.CentralAndTransmitter || combatScope == CombatScope.Central;

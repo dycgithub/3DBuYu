@@ -5,21 +5,10 @@ using Interfaces;
 namespace Services
 {
     /// <summary>
-    /// 空间查询服务接口。
-    /// 替代直接调用 <see cref="SpatialSystem.Bridge.SpatialRegistry.Instance"/>，
-    /// 使 EnemyBase、Bullet、AimTargetProvider 等通过依赖注入获取查询能力。
+    /// 只读伤害目标查询。注册与批量同步由空间服务和实体生命周期负责。
     /// </summary>
     public interface ISpatialQueryService
     {
-        /// <summary>注册一个实体到空间网格。</summary>
-        int Register(IDamageable entity, float radius, int layerMask);
-
-        /// <summary>从空间网格注销。</summary>
-        void Unregister(int entityId);
-
-        /// <summary>更新实体位置（仅在位置变化时调用）。</summary>
-        void UpdatePosition(int entityId, Vector3 position);
-
         /// <summary>查询最近的匹配实体。</summary>
         IDamageable QueryNearest(Vector3 center, float radius, int layerMask);
 

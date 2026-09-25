@@ -18,6 +18,9 @@ namespace GameSystem
         /// <summary>战斗胜利并完成结算。</summary>
         Settled,
 
+        /// <summary>战斗结算后的 Supply 阶段。</summary>
+        Supply,
+
         /// <summary>战斗失败。</summary>
         Failed,
 
@@ -34,7 +37,7 @@ namespace GameSystem
         [SerializeField] private PlayerLevelConfig playerLevelConfig;
 
         [Header("系统引用")]
-        [Inject] private ResourceManager resourceManager;
+        [Inject] private IPointsService _points;
 
         private readonly GameStateMachine _stateMachine = new();
         private readonly GameSession _session = new();
@@ -43,7 +46,8 @@ namespace GameSystem
         [Inject] private IEnergyService _energy;
         [Inject] private Play.CentralCore centralCore;
         [Inject] private IEnemyPopulationService _populationService;
-        [Inject] private RunRuleService _runRuleService;
+        // 规则对象无状态且只由本管理器使用，不占用 GameLoop 容器注册。
+        private readonly RunRuleService _runRuleService = new RunRuleService();
         [Inject] private IKillStreakService _killStreak;
         [Inject] private IInputService _input;
         [Inject] private CentralSkillLoadout _centralSkillLoadout;
@@ -65,6 +69,21 @@ namespace GameSystem
 
         /// <summary>获取本局累计积分。</summary>
         public int SessionPoints => _session.SessionPoints;
+
+        /// <summary>获取目标时长前的本局积分。</summary>
+        public int BaseSessionPoints => _session.BasePoints;
+
+        /// <summary>获取超时阶段获得的本局积分。</summary>
+        public int OvertimeSessionPoints => _session.OvertimePoints;
+
+        /// <summary>获取本局是否已经进入超时阶段。</summary>
+        public bool IsOvertime => _session.IsOvertime;
+
+        /// <summary>获取本局已经经过的超时时间。</summary>
+        public float OvertimeElapsedTime => _session.OvertimeElapsedTime;
+
+        /// <summary>获取当前超时能量消耗倍率；未进入超时时返回 1。</summary>
+        public float OvertimeMultiplier => CalculateOvertimeMultiplier();
 
         /// <summary>获取本局能量服务。</summary>
         public IEnergyService Energy => _energy;
@@ -219,11 +238,17 @@ namespace GameSystem
             _session.AdvanceTime(deltaTime);
             OnRunTimeChanged?.Invoke(_session.ElapsedTime);
 
+            if (!UpdateRunPhase())
+            {
+                return;
+            }
+
             if (_energy == null)
             {
                 return;
             }
 
+            SetEnergyConsumptionMultiplier(OvertimeMultiplier);
             _energy.Tick(deltaTime, stageConfig != null ? stageConfig.baseEnergyDrainPerSecond : 0f);
         }
 
@@ -241,7 +266,7 @@ namespace GameSystem
         /// <remarks>没有关卡配置或当前已经在战斗时不会开始新局。</remarks>
         public void StartLevel()
         {
-            if (_stateMachine.CurrentState is GameState.Playing or GameState.Paused)
+            if (_stateMachine.CurrentState is GameState.Playing or GameState.Paused or GameState.Supply)
             {
                 return;
             }
@@ -266,6 +291,7 @@ namespace GameSystem
             _energyDepletedDuringStart = false;
             ActivateRunSubscriptions();
             _energy?.Initialize(stageConfig.initialEnergy, stageConfig.maxEnergy);
+            SetEnergyConsumptionMultiplier(1f);
 
             _stateMachine.ChangeState(GameState.Playing);
             SpawnPlayer();
@@ -369,7 +395,7 @@ namespace GameSystem
 
             if (_lastSettlementReward > 0)
             {
-                resourceManager?.AddPoints(_lastSettlementReward, "本局胜利结算");
+                _points.AddPoints(_lastSettlementReward, "本局胜利结算");
                 _playerLevelManager?.AddLifetimePoints(_lastSettlementReward);
             }
 
@@ -378,6 +404,32 @@ namespace GameSystem
             Debug.Log(
                 $"[GameManager] 结算完成(胜利): 本局积分 {_session.SessionPoints}, " +
                 $"奖励 {_lastSettlementReward} 积分");
+        }
+
+        /// <summary>从胜利结算状态进入 Supply 阶段。</summary>
+        /// <returns>成功进入 Supply 阶段时返回 true。</returns>
+        public bool TryEnterSupply()
+        {
+            if (_stateMachine.CurrentState != GameState.Settled)
+            {
+                return false;
+            }
+
+            _stateMachine.ChangeState(GameState.Supply);
+            return true;
+        }
+
+        /// <summary>结束 Supply 阶段并返回基地状态。</summary>
+        /// <returns>成功离开 Supply 阶段时返回 true。</returns>
+        public bool TryExitSupply()
+        {
+            if (_stateMachine.CurrentState != GameState.Supply)
+            {
+                return false;
+            }
+
+            ReturnToMenu();
+            return true;
         }
 
         /// <summary>
@@ -420,7 +472,7 @@ namespace GameSystem
             OnGameStateChanged?.Invoke(oldState, newState);
 
             // 状态变化兜底，确保敌群调度在非 Playing 状态下停止。
-            if (newState == GameState.Settled || newState == GameState.Failed || newState == GameState.Menu)
+            if (newState is GameState.Supply or GameState.Settled or GameState.Failed or GameState.Menu)
             {
                 _populationService?.StopPopulation();
             }
@@ -465,6 +517,69 @@ namespace GameSystem
         }
 
         /// <summary>
+        /// 根据目标时长和击杀进度推进普通阶段或超时阶段。
+        /// </summary>
+        /// <returns>本局仍可继续运行时返回 true。</returns>
+        private bool UpdateRunPhase()
+        {
+            if (stageConfig == null || _runRuleService == null)
+            {
+                return true;
+            }
+
+            float targetDuration = stageConfig.timeLimit;
+            int targetKillCount = stageConfig.targetKillCount;
+            if (_runRuleService.ShouldFailAtTarget(
+                    _session.ElapsedTime,
+                    targetDuration,
+                    _session.KillCount,
+                    targetKillCount))
+            {
+                GameOver();
+                return false;
+            }
+
+            if (!_session.IsOvertime &&
+                _runRuleService.ShouldEnterOvertime(
+                    _session.ElapsedTime,
+                    targetDuration,
+                    _session.KillCount,
+                    targetKillCount))
+            {
+                _session.EnterOvertime(_session.ElapsedTime - targetDuration);
+            }
+
+            SetEnergyConsumptionMultiplier(OvertimeMultiplier);
+            return _stateMachine.CurrentState == GameState.Playing;
+        }
+
+        /// <summary>将当前阶段倍率同步到统一能量消耗服务。</summary>
+        /// <param name="multiplier">当前能量消耗倍率。</param>
+        private void SetEnergyConsumptionMultiplier(float multiplier)
+        {
+            if (_energy is IEnergyCostService energyCostService)
+            {
+                energyCostService.SetConsumptionMultiplier(multiplier);
+            }
+        }
+
+        /// <summary>按关卡配置计算当前超时倍率。</summary>
+        /// <returns>当前超时倍率；普通阶段返回 1。</returns>
+        private float CalculateOvertimeMultiplier()
+        {
+            if (!_session.IsOvertime || stageConfig == null)
+            {
+                return 1f;
+            }
+
+            return RunRuleMath.CalculateOvertimeMultiplier(
+                _session.OvertimeElapsedTime,
+                stageConfig.overtimeStartMultiplier,
+                stageConfig.overtimeMultiplierIntervalSeconds,
+                stageConfig.overtimeMultiplierIncrement);
+        }
+
+        /// <summary>
         /// 获取场景中注入的核心对象根节点作为本局玩家实例。
         /// </summary>
         private void SpawnPlayer()
@@ -494,6 +609,12 @@ namespace GameSystem
 
             int basePoints = Mathf.Max(0, pointsValue);
             _session.RecordKill(basePoints);
+
+            if (!UpdateRunPhase())
+            {
+                return basePoints;
+            }
+
             _killStreak?.RegisterKill();
             _enemyKilled?.Invoke(basePoints);
             return basePoints;
@@ -506,8 +627,10 @@ namespace GameSystem
         private int CalculateSettlementReward()
         {
             return RunRuleMath.CalculateSettlementReward(
-                _session.SessionPoints,
-                SettlementMultiplier);
+                _session.BasePoints,
+                _session.OvertimePoints,
+                SettlementMultiplier,
+                OvertimeMultiplier);
         }
 
         /// <summary>清除由全局容器持有的本局库存和装备状态。</summary>

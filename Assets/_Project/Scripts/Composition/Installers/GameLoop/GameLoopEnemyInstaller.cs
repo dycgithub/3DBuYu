@@ -1,5 +1,7 @@
 using System;
+using EnemySystem.AreaEffect;
 using EnemySystem.Spawning;
+using EnemySystem.Visual;
 using FlockingSystem.ECS;
 using Services;
 using VContainer;
@@ -38,7 +40,9 @@ public sealed class GameLoopEnemyInstaller : IInstaller
         }
 
         builder.RegisterInstance(_enemyFlockSettings).AsSelf();
-        builder.Register<EnemyFlockRuntimeService>(Lifetime.Singleton).AsSelf();
+        builder.RegisterEntryPoint<EnemyFlockRuntimeService>(Lifetime.Singleton).AsSelf();
+        builder.RegisterEntryPoint<EnemyVisualSystem>(Lifetime.Singleton).AsSelf();
+        builder.RegisterEntryPoint<EnemyAreaEffectService>(Lifetime.Singleton).AsSelf();
         builder.Register<EnemyPool>(Lifetime.Singleton).AsSelf();
         builder.Register<EnemyFactory>(Lifetime.Singleton).AsSelf();
         builder.RegisterEntryPoint<EnemySpawner>(Lifetime.Singleton)

@@ -33,28 +33,19 @@ namespace Play
                 _stamina = GetComponent<StaminaController>();
             }
             _combatTarget = GetComponent<PlayerCombatTarget>();
-            if (_movementCamera == null)
-            {
-                _movementCamera = Camera.main;
-            }
         }
 
         /// <summary>按输入强度计算本帧弧长；画面方向在两极仍保持连续。</summary>
         private void Update()
         {
-            Vector2 mv = _input != null ? _input.Move : Vector2.zero;
+            Vector2 mv = _input.Move;
             float inputX = mv.x;
             float inputY = mv.y;
             bool isMoving = Mathf.Abs(inputX) > 0.01f || Mathf.Abs(inputY) > 0.01f;
 
-            if (_movementCamera == null)
-            {
-                _movementCamera = Camera.main;
-            }
-
             _stamina.Tick(Time.deltaTime, isMoving);
 
-            if (!isMoving || !_stamina.canMove || _movementCamera == null)
+            if (!isMoving || !_stamina.canMove)
             {
                 return;
             }

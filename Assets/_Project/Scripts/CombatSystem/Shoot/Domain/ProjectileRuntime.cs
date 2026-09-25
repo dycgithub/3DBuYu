@@ -9,6 +9,8 @@ namespace CombatSystem
     /// </summary>
     public sealed class ProjectileRuntime
     {
+        /// <summary>每次租借递增，查询句柄据此拒绝池对象复用。</summary>
+        internal ulong Generation { get; private set; }
         /// <summary>投射物数据快照。</summary>
         public ProjectileData Data { get; private set; }
         /// <summary>投射物当前位置。</summary>
@@ -38,6 +40,26 @@ namespace CombatSystem
         /// <summary>本次飞行已经命中的目标实例 ID。</summary>
         public readonly HashSet<int> HitTargetInstanceIds = new();
 
+        /// <summary>剩余跳弹次数，仅在当前投射物生命周期内递减。</summary>
+        internal int RemainingRicochetCount { get; set; }
+
+        /// <summary>记录投射物是否已经分裂，避免分裂子弹继续递归生成。</summary>
+        internal bool HasSplit { get; set; }
+
+        /// <summary>标记本帧命中后是否改变方向，供扫掠循环停止旧方向的碰撞结果。</summary>
+        internal bool DirectionChangedThisStep { get; set; }
+
+        /// <summary>改向后待下一帧补算的剩余飞行距离。</summary>
+        internal float PendingTravelDistance { get; set; }
+
+        /// <summary>按配置比例递减投射物后续命中的伤害。</summary>
+        internal void ApplyDamageMultiplier(float multiplier)
+        {
+            ProjectileData data = Data;
+            data.DamageAmount *= Mathf.Clamp01(multiplier);
+            Data = data;
+        }
+
         /// <summary>创建并初始化投射物运行时状态。</summary>
         /// <param name="projectileData">投射物数据快照。</param>
         /// <param name="viewInstance">绑定的视觉实例。</param>
@@ -51,12 +73,21 @@ namespace CombatSystem
         /// <param name="viewInstance">绑定的视觉实例。</param>
         public void Initialize(ProjectileData projectileData, GameObject viewInstance)
         {
+            Generation = checked(Generation + 1);
             Data = projectileData;
             Position = projectileData.OriginPosition;
             Direction = projectileData.LaunchDirection;
             TraveledDistance = 0f;
             RemainingLifetimeSeconds = ResolveLifetimeSeconds(projectileData);
             RemainingPenetrationCount = Mathf.Max(0, projectileData.PenetrationCount);
+            RemainingRicochetCount = Mathf.Max(
+                0,
+                projectileData.ProjectileProfileSnapshot != null
+                    ? projectileData.ProjectileProfileSnapshot.RicochetCount
+                    : 0);
+            HasSplit = projectileData.IsSplitChild;
+            DirectionChangedThisStep = false;
+            PendingTravelDistance = 0f;
             ViewInstance = viewInstance;
             IsCompleted = false;
             TrackingTarget = null;
@@ -76,6 +107,10 @@ namespace CombatSystem
             TraveledDistance = 0f;
             RemainingLifetimeSeconds = 0f;
             RemainingPenetrationCount = 0;
+            RemainingRicochetCount = 0;
+            HasSplit = false;
+            DirectionChangedThisStep = false;
+            PendingTravelDistance = 0f;
             ViewInstance = null;
             IsCompleted = true;
             TrackingTarget = null;

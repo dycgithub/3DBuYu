@@ -1,4 +1,5 @@
 using CombatSystem;
+using GameSystem;
 using Interfaces;
 using Services;
 using UnityEngine;
@@ -20,6 +21,8 @@ namespace Play
         [SerializeField] private Color trajectoryColor = new Color(0f, 1f, 1f, 0.6f);
         [SerializeField, Range(0.01f, 1f)] private float lineWidth = 0.1f;
         [SerializeField] private Material lineMaterial;
+        [SerializeField] private LineRenderer _rangeEndpoint;
+        [SerializeField, Min(0.01f)] private float endpointRadius = 0.35f;
 
         [Header("采样")]
         [SerializeField, Range(10, 200)] private int predictionSteps = 60;
@@ -33,14 +36,20 @@ namespace Play
         private CentralTransmitterRuntime _port;
         private Transform _firePoint;
         private Vector3[] _points;
+        private Vector3[] _endpointPoints;
+        private float _predictionTimeStep;
         private bool _initialized;
 
-        [Inject] private IProjectileTrajectorySimulationService _trajectorySimulation;
+        /// <summary>无状态轨迹算法由当前显示组件直接拥有，不占用容器作用域。</summary>
+        private readonly IProjectileTrajectorySimulationService _trajectorySimulation =
+            new ProjectileTrajectoryPredictor();
+        [Inject] private OptionsService options;
+        [Inject] private ICombatPhaseService _combatPhase;
 
         /// <summary>获取当前轨迹显示绑定的端口索引。</summary>
         public int PortIndex => portIndex;
 
-        /// <summary>缓存 LineRenderer 并初始化其渲染模式。</summary>
+        /// <summary>缓存轨迹线并准备射程终点标记。</summary>
         private void Awake()
         {
             _lineRenderer = GetComponent<LineRenderer>();
@@ -48,8 +57,18 @@ namespace Play
             _lineRenderer.positionCount = 0;
             if (lineMaterial != null)
             {
-                _lineRenderer.material = lineMaterial;
+                _lineRenderer.sharedMaterial = lineMaterial;
             }
+
+            _rangeEndpoint ??= transform.Find("RangeEndpoint")?.GetComponent<LineRenderer>();
+            if (_rangeEndpoint == null)
+            {
+                GameObject endpointObject = new GameObject("RangeEndpoint");
+                endpointObject.transform.SetParent(transform, false);
+                _rangeEndpoint = endpointObject.AddComponent<LineRenderer>();
+            }
+
+            ConfigureEndpoint();
         }
 
         /// <summary>
@@ -88,26 +107,33 @@ namespace Play
             TryInitializeFromHierarchy();
         }
 
-        /// <summary>每帧重新计算当前端口轨迹并写入 LineRenderer。</summary>
+        /// <summary>按当前端口、开关和战斗状态更新轨迹及射程终点。</summary>
         private void LateUpdate()
         {
+            if (!showTrajectory || !ShouldDisplay())
+            {
+                HideVisuals();
+                return;
+            }
+
             if (!_initialized)
             {
                 TryInitializeFromHierarchy();
             }
 
             ProjectileProfileSO profile = _port?.So?.defaultProjectileProfile;
-            if (!_initialized || _firePoint == null || _trajectorySimulation == null || profile == null)
+            if (!_initialized || _port.IsLocked || _firePoint == null ||
+                _trajectorySimulation == null || profile == null)
             {
-                _lineRenderer.positionCount = 0;
+                HideVisuals();
                 return;
             }
 
-            IDamageable target = _detector.GetTarget(portIndex);
-            EnsurePointBuffer();
             float maximumTravelDistance = Mathf.Min(
-                Mathf.Max(0f, _port.So.baseRange),
-                Mathf.Max(0f, profile.MaximumTravelDistance));
+                NormalizeDistance(_port.So.baseRange),
+                NormalizeDistance(profile.MaximumTravelDistance));
+            EnsurePointBuffer(profile, maximumTravelDistance);
+            IDamageable target = _detector.GetTarget(portIndex);
             _trajectorySimulation.PredictTrajectory(
                 profile,
                 maximumTravelDistance,
@@ -115,14 +141,15 @@ namespace Play
                 _firePoint.forward,
                 target,
                 _points,
-                timeStep);
+                _predictionTimeStep);
 
             _lineRenderer.startColor = trajectoryColor;
             _lineRenderer.endColor = trajectoryColor;
-            _lineRenderer.startWidth = lineWidth;
-            _lineRenderer.endWidth = lineWidth;
+            _lineRenderer.startWidth = Mathf.Max(0.01f, lineWidth);
+            _lineRenderer.endWidth = Mathf.Max(0.01f, lineWidth);
             _lineRenderer.positionCount = _points.Length;
             _lineRenderer.SetPositions(_points);
+            UpdateRangeEndpoint(_firePoint.forward);
         }
 
         /// <summary>从父级层级查找依赖并执行一次初始化。</summary>
@@ -179,14 +206,144 @@ namespace Play
             return null;
         }
 
-        /// <summary>确保轨迹采样数组与当前采样步数一致。</summary>
-        private void EnsurePointBuffer()
+        /// <summary>确保采样数量足够，并调整步长使终点覆盖最大射程。</summary>
+        private void EnsurePointBuffer(
+            ProjectileProfileSO profile,
+            float maximumTravelDistance)
         {
-            int pointCount = Mathf.Max(1, predictionSteps);
+            int pointCount = Mathf.Max(2, predictionSteps);
             if (_points == null || _points.Length != pointCount)
             {
                 _points = new Vector3[pointCount];
             }
+
+            float speed = NormalizeDistance(profile.SpeedUnitsPerSecond);
+            float requestedTimeStep = NormalizeTimeStep(timeStep);
+            if (speed <= 0f || maximumTravelDistance <= 0f)
+            {
+                _predictionTimeStep = requestedTimeStep;
+                return;
+            }
+
+            float requestedDistance = speed * requestedTimeStep * (pointCount - 1);
+            _predictionTimeStep = requestedDistance >= maximumTravelDistance
+                ? requestedTimeStep
+                : maximumTravelDistance / (speed * (pointCount - 1));
+        }
+
+        /// <summary>配置射程终点环线的渲染参数。</summary>
+        private void ConfigureEndpoint()
+        {
+            if (_rangeEndpoint == null)
+            {
+                return;
+            }
+
+            _rangeEndpoint.useWorldSpace = true;
+            _rangeEndpoint.loop = false;
+            _rangeEndpoint.positionCount = 0;
+            _rangeEndpoint.startColor = trajectoryColor;
+            _rangeEndpoint.endColor = trajectoryColor;
+            _rangeEndpoint.startWidth = Mathf.Max(0.01f, lineWidth * 0.75f);
+            _rangeEndpoint.endWidth = Mathf.Max(0.01f, lineWidth * 0.75f);
+            if (lineMaterial != null)
+            {
+                _rangeEndpoint.sharedMaterial = lineMaterial;
+            }
+        }
+
+        /// <summary>将射程终点写成垂直于弹道方向的发光圆环。</summary>
+        private void UpdateRangeEndpoint(Vector3 direction)
+        {
+            if (_rangeEndpoint == null || _points == null || _points.Length == 0)
+            {
+                return;
+            }
+
+            const int endpointSegments = 20;
+            int pointCount = endpointSegments + 1;
+            if (_endpointPoints == null || _endpointPoints.Length != pointCount)
+            {
+                _endpointPoints = new Vector3[pointCount];
+            }
+
+            Vector3 forward = direction.sqrMagnitude > 0.0001f
+                ? direction.normalized
+                : Vector3.forward;
+            Vector3 right = Vector3.Cross(forward, Vector3.up);
+            if (right.sqrMagnitude <= 0.0001f)
+            {
+                right = Vector3.Cross(forward, Vector3.right);
+            }
+
+            right.Normalize();
+            Vector3 up = Vector3.Cross(forward, right).normalized;
+            float radius = Mathf.Max(0.01f, endpointRadius);
+            Vector3 center = _points[_points.Length - 1];
+            for (int index = 0; index < pointCount; index++)
+            {
+                float angle = index / (float)endpointSegments * Mathf.PI * 2f;
+                _endpointPoints[index] = center +
+                    (right * Mathf.Cos(angle) + up * Mathf.Sin(angle)) * radius;
+            }
+
+            _rangeEndpoint.positionCount = _endpointPoints.Length;
+            _rangeEndpoint.SetPositions(_endpointPoints);
+        }
+
+        /// <summary>隐藏轨迹和射程终点。</summary>
+        private void HideVisuals()
+        {
+            if (_lineRenderer != null)
+            {
+                _lineRenderer.positionCount = 0;
+            }
+
+            if (_rangeEndpoint != null)
+            {
+                _rangeEndpoint.positionCount = 0;
+            }
+        }
+
+        /// <summary>判断全局设置和战斗阶段是否允许显示。</summary>
+        private bool ShouldDisplay()
+        {
+            if (options != null && !options.Current.showCombatRangeVisuals)
+            {
+                return false;
+            }
+
+            return _combatPhase == null || _combatPhase.CanPerformCombatActions;
+        }
+
+        /// <summary>将距离配置限制为有限非负值。</summary>
+        private static float NormalizeDistance(float value)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value))
+            {
+                return 0f;
+            }
+
+            return Mathf.Max(0f, value);
+        }
+
+        /// <summary>将采样时间步长限制为有效值。</summary>
+        private static float NormalizeTimeStep(float value)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value))
+            {
+                return 0.05f;
+            }
+
+            return Mathf.Max(0.01f, value);
+        }
+
+        private void OnValidate()
+        {
+            endpointRadius = Mathf.Max(0.01f, endpointRadius);
+            lineWidth = Mathf.Max(0.01f, lineWidth);
+            predictionSteps = Mathf.Max(2, predictionSteps);
+            timeStep = NormalizeTimeStep(timeStep);
         }
     }
 }

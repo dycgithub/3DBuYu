@@ -11,11 +11,6 @@ using Services;
 /// </summary>
 public class ProjectLifetimeScope : LifetimeScope
 {
-    /// <summary>
-    /// 全局根容器单例（DDOL）。未注册到 DI 的场景组件解析全局服务时使用。
-    /// </summary>
-    public static ProjectLifetimeScope Instance { get; private set; }
-
     /// <summary>物品目录资产(可选):拖入后商店/存档按 id 查询使用;未配置时注册默认空目录。</summary>
     [SerializeField] private ItemCatalog itemCatalog;
 
@@ -38,23 +33,8 @@ public class ProjectLifetimeScope : LifetimeScope
             Build();
         }
 
-        Instance = this;
-
         // 根容器由 VContainerSettings 实例化时已 DontDestroyOnLoad,此处为冗余保险,无害。
         DontDestroyOnLoad(gameObject);
-    }
-
-    /// <summary>
-    /// 释放全局容器并清除静态实例引用。
-    /// </summary>
-    protected override void OnDestroy()
-    {
-        // 先让基类释放容器(DisposeCore),再清空静态引用
-        base.OnDestroy();
-        if (Instance == this)
-        {
-            Instance = null;
-        }
     }
 
     /// <summary>
@@ -70,8 +50,14 @@ public class ProjectLifetimeScope : LifetimeScope
         // === 物品目录(配置优先,默认空目录) ===
         new ProjectInventoryInstaller(itemCatalog).Install(builder);
         // === DDOL 场景组件(挂在 ScopeContainer 下,永不销毁) ===
-        builder.RegisterComponentInHierarchy<ResourceManager>().As<IPointsService>().AsSelf();
+        builder.RegisterComponentInHierarchy<ResourceManager>().As<IPointsService>();
         builder.RegisterComponentInHierarchy<AudioManager>().AsSelf();
+        InputSystem.InputService inputService =
+            GetComponentInChildren<InputSystem.InputService>(true);
+        if (inputService != null)
+        {
+            builder.RegisterComponent(inputService).As<IInputService>().AsSelf();
+        }
 
         // === 启动场景组件 ===
         builder.RegisterComponentInHierarchy<SceneLoader>().AsSelf();

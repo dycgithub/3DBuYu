@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 
@@ -6,11 +7,10 @@ namespace GameSystem
 {
     /// <summary>
     /// 存档系统。
-    /// 管理游戏数据、资源、设置和通行证进度的持久化。
+    /// 管理资源、设置、输入覆盖、通行证和玩家等级的持久化。
     /// </summary>
     public static class SaveSystem
     {
-        private const string GameDataFileName = "gamedata.json";
         private const string ResourceDataFileName = "resourcedata.json";
         private const string BattlePassDataFileName = "battlepass.json";
         private const string PlayerLevelDataFileName = "playerlevel.json";
@@ -44,26 +44,6 @@ namespace GameSystem
         {
             return Path.Combine(GetSaveDirectoryPath(), fileName);
         }
-
-        #region 游戏存档
-
-        /// <summary>
-        /// 保存游戏统计。
-        /// </summary>
-        public static void SaveGameData(GameSaveData data)
-        {
-            WriteJsonFile(GameDataFileName, data);
-        }
-
-        /// <summary>
-        /// 加载游戏统计。
-        /// </summary>
-        public static GameSaveData LoadGameData()
-        {
-            return ReadJsonFile<GameSaveData>(GameDataFileName);
-        }
-
-        #endregion
 
         #region 资源存档
 
@@ -136,7 +116,7 @@ namespace GameSystem
         }
 
         /// <summary>
-        /// 加载设置。
+        /// 加载当前格式的设置；文件不存在或读取失败时返回默认设置。
         /// </summary>
         public static SettingsData LoadSettings()
         {
@@ -248,19 +228,6 @@ namespace GameSystem
     }
 
     /// <summary>
-    /// 游戏统计存档。
-    /// </summary>
-    [Serializable]
-    public class GameSaveData
-    {
-        public float totalPlayTime;
-        public int totalGamesPlayed;
-        public int totalGamesWon;
-        public int highestDifficultyReached;
-        public string lastPlayDate;
-    }
-
-    /// <summary>
     /// 设置数据。
     /// </summary>
     [Serializable]
@@ -271,10 +238,14 @@ namespace GameSystem
         public float sfxVolume = 1f;
         public int resolutionIndex;
         public bool fullscreen = true;
+        public bool vSync = true;
+        public bool frameRateLimitEnabled;
+        public int frameRateLimit = 60;
         public int qualityLevel = 2;
         public float mouseSensitivity = 1f;
         public bool invertY;
         public bool showFPS;
+        public bool showCombatRangeVisuals = true;
         public KeyCode pauseKey = KeyCode.Escape;
     }
 
@@ -283,5 +254,11 @@ namespace GameSystem
     {
         /// <summary>暂停操作的输入覆盖路径。</summary>
         public string pauseBindingOverridePath;
+
+        /// <summary>按固定输入动作顺序保存的主绑定覆盖路径。</summary>
+        public List<string> bindingOverridePaths = new();
+
+        /// <summary>按固定输入动作顺序保存的备用绑定覆盖路径。</summary>
+        public List<string> secondaryBindingOverridePaths = new();
     }
 }

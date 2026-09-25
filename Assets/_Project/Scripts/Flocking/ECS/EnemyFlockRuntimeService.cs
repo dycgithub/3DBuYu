@@ -3,24 +3,43 @@ using System.Collections.Generic;
 using EnemySystem;
 using Unity.Entities;
 using Unity.Mathematics;
+using Unity.Profiling;
 using Unity.Rendering;
-using Unity.Transforms;
 using UnityEngine;
-using UnityEngine.Rendering;
+using VContainer.Unity;
 
 namespace FlockingSystem.ECS
 {
     /// <summary>
-    /// 管理 ECS 敌人的原型、slot、渲染资源和 GameObject Transform 桥接。
-    /// 群游计算由 EnemyFlockSimulationSystem 执行，本服务不直接计算 Boids 规则。
+    /// 管理 ECS 敌人的原型、槽位、渲染资源和 GameObject Transform 桥接。
+    /// <para>
+    /// 本服务只处理实体生命周期、托管命令和表现资源；群游计算由
+    /// EnemyFlockSimulationSystem 执行，姿态提交由 EnemyFlockCommitSystem 执行。
+    /// </para>
     /// </summary>
-    public sealed class EnemyFlockRuntimeService : IDisposable
+    public sealed partial class EnemyFlockRuntimeService : IDisposable, ITickable
     {
+        private const float InitialSpeedSeedStep = 17.13f;
+
+        private static readonly ProfilerMarker TickMarker =
+            new("3DBuYu/VContainer/EnemyFlockRuntimeService.Tick");
+        private static readonly ProfilerMarker CompleteJobsMarker =
+            new("3DBuYu/EnemyFlockRuntimeService.CompleteJobsBeforeStructuralChange");
+
+        /// <summary>场景级静态配置；服务不修改资产内容。</summary>
         private readonly EnemyFlockSettingsSO _flockSettings;
-        private readonly Dictionary<int, EnemyFlockVisual> _visuals = new();
+
+        /// <summary>按群游槽位反查托管桥接，供交换删除时修正 Transform 索引。</summary>
         private readonly Dictionary<int, EnemyFlockBridge> _bridgesBySlot = new();
+
+        /// <summary>已释放、可复用的群游槽位。</summary>
         private readonly Queue<int> _freeSlots = new();
-        private readonly List<Material> _runtimeMaterials = new();
+
+        /// <summary>等待 ITickable 批量写入的速度倍率。</summary>
+        private readonly Dictionary<EnemyFlockBridge, float> _pendingSpeedMultipliers = new();
+
+        /// <summary>等待安全 ECS 阶段写入的实例视觉状态。</summary>
+        private readonly Dictionary<EnemyFlockBridge, EnemyFlockVisualState> _pendingVisualStates = new();
 
         private World _world;
         private EntityManager _entityManager;
@@ -30,9 +49,13 @@ namespace FlockingSystem.ECS
         private float _maximumNeighbourDistance;
         private float _maximumSeparationDistance;
         private int _nextSlot;
+
+        /// <summary>静态世界配置已经写入当前 ECS World 的标记。</summary>
+        private bool _worldConfigInitialized;
+
         private bool _disposed;
         private bool _warnedMissingWorld;
-        private bool _warnedMissingGraphics;
+        private bool _warnedShaderFallback;
 
         /// <summary>
         /// 使用场景级 Flocking 配置创建运行时服务。
@@ -43,12 +66,45 @@ namespace FlockingSystem.ECS
             _flockSettings = settings;
         }
 
-        private struct EnemyFlockVisual
+        /// <summary>
+        /// 批量提交本帧收到的速度变化，避免每个 Buff 逐次完成 ECS Job。
+        /// </summary>
+        public void Tick()
         {
-            public BatchMaterialID MaterialId;
-            public BatchMeshID MeshId;
-            public PostTransformMatrix PostTransform;
-            public float4 BaseColor;
+            using var profilerScope = TickMarker.Auto();
+            if (_pendingSpeedMultipliers.Count == 0 && _pendingVisualStates.Count == 0)
+            {
+                return;
+            }
+
+            if (_disposed || _world == null || !_world.IsCreated)
+            {
+                _pendingSpeedMultipliers.Clear();
+                _pendingVisualStates.Clear();
+                return;
+            }
+
+            CompleteJobsBeforeStructuralChange();
+            foreach (KeyValuePair<EnemyFlockBridge, float> pending in _pendingSpeedMultipliers)
+            {
+                EnemyFlockBridge bridge = pending.Key;
+                if (!CanUpdateAgent(bridge))
+                {
+                    continue;
+                }
+
+                EnemyFlockAgent agent = _entityManager.GetComponentData<EnemyFlockAgent>(bridge.Entity);
+                agent.SpeedMultiplier = pending.Value;
+                _entityManager.SetComponentData(bridge.Entity, agent);
+            }
+
+            foreach (KeyValuePair<EnemyFlockBridge, EnemyFlockVisualState> pending in _pendingVisualStates)
+            {
+                ApplyVisualState(pending.Key, pending.Value);
+            }
+
+            _pendingSpeedMultipliers.Clear();
+            _pendingVisualStates.Clear();
         }
 
         /// <summary>
@@ -63,7 +119,8 @@ namespace FlockingSystem.ECS
             Vector3 position,
             Quaternion rotation)
         {
-            if (_disposed || _flockSettings == null || bridge == null || sourcePrefab == null || !TryInitializeEcsWorld())
+            if (_disposed || _flockSettings == null || bridge == null ||
+                sourcePrefab == null || !TryInitializeEcsWorld())
             {
                 return false;
             }
@@ -73,19 +130,31 @@ namespace FlockingSystem.ECS
                 return false;
             }
 
+            CompleteJobsBeforeStructuralChange();
             EnemyFlockProfile profile = _flockSettings.GetProfileForEnemyType(enemyType, speedMultiplier);
-
-            _maximumNeighbourDistance = Mathf.Max(_maximumNeighbourDistance, profile.NeighbourDistance);
-            _maximumSeparationDistance = Mathf.Max(_maximumSeparationDistance, profile.SeparationDistance);
-            EnsureWorldConfigEntity();
-            UpdateWorldConfig();
+            bool worldConfigChanged = !_worldConfigInitialized
+                || _configEntity == Entity.Null
+                || !_entityManager.Exists(_configEntity)
+                || profile.NeighbourDistance > _maximumNeighbourDistance
+                || profile.SeparationDistance > _maximumSeparationDistance;
+            if (worldConfigChanged)
+            {
+                _maximumNeighbourDistance = Mathf.Max(
+                    _maximumNeighbourDistance,
+                    profile.NeighbourDistance);
+                _maximumSeparationDistance = Mathf.Max(
+                    _maximumSeparationDistance,
+                    profile.SeparationDistance);
+                EnsureWorldConfigEntity();
+                UpdateWorldConfig();
+                _worldConfigInitialized = true;
+            }
 
             if (!TryGetVisualDefinition(sourcePrefab, profile.VisualIndex, out EnemyFlockVisual visual))
             {
                 return false;
             }
 
-            CompleteJobsBeforeStructuralChange();
             if (_prototype == Entity.Null || !_entityManager.Exists(_prototype))
             {
                 _prototype = CreateAgentPrototype(visual);
@@ -125,6 +194,7 @@ namespace FlockingSystem.ECS
             }
 
             bridge.CacheBaseColor(visual.BaseColor);
+            bridge.CacheVisualColors(visual.CrackColor, visual.EmissionColor);
             SetEntityFlockData(bridge, profile, visual, position, rotation);
             bridge.CacheSpeedMultiplier(profile.SpeedMultiplier);
             bridge.SetEcsPresentationEnabled(true);
@@ -133,30 +203,34 @@ namespace FlockingSystem.ECS
         }
 
         /// <summary>
-        /// 暂停一个已绑定实体，保留实体和 slot 供对象池复用。
+        /// 释放实体和 slot，避免闲置预制体池持续占用全局容量。
         /// </summary>
-        public bool ReleaseAgent(EnemyFlockBridge bridge)
+        public bool ReleaseAgent(
+            EnemyFlockBridge bridge,
+            bool restoreSourceRenderer = true)
         {
             if (_disposed
                 || _world == null
                 || !_world.IsCreated
                 || bridge == null
-                || bridge.Runtime != this
-                || !_entityManager.Exists(bridge.Entity))
+                || bridge.Runtime != this)
             {
                 return false;
             }
 
-            CompleteJobsBeforeStructuralChange();
-            EnemyFlockAgent agent = _entityManager.GetComponentData<EnemyFlockAgent>(bridge.Entity);
-            agent.ExternalImpulse = float3.zero;
-            _entityManager.SetComponentData(bridge.Entity, agent);
-            _entityManager.SetComponentEnabled<EnemyFlockActive>(bridge.Entity, false);
-            _entityManager.SetComponentEnabled<MaterialMeshInfo>(bridge.Entity, false);
-            _commitSystem.SetAgentTransformActive(bridge.TransformArrayIndex, false);
+            if (!_entityManager.Exists(bridge.Entity))
+            {
+                UnbindAgent(bridge, restoreSourceRenderer);
+                return false;
+            }
+
+            UnbindAgent(bridge, restoreSourceRenderer);
             return true;
         }
 
+        /// <summary>缓存代理速度倍率，等待本帧 ITickable 阶段统一写入 ECS。</summary>
+        /// <param name="bridge">目标敌人的 ECS 桥接。</param>
+        /// <param name="multiplier">相对基础速度的非负倍率。</param>
         internal void UpdateAgentSpeedMultiplier(EnemyFlockBridge bridge, float multiplier)
         {
             if (!CanUpdateAgent(bridge))
@@ -164,10 +238,41 @@ namespace FlockingSystem.ECS
                 return;
             }
 
+            _pendingSpeedMultipliers[bridge] = Mathf.Max(0f, multiplier);
+        }
+
+        /// <summary>缓存单个敌人的实例视觉状态，等待 ECS 安全阶段统一写入。</summary>
+        internal void UpdateAgentVisualState(
+            EnemyFlockBridge bridge,
+            EnemyFlockVisualState state)
+        {
+            if (!CanUpdateAgent(bridge))
+            {
+                return;
+            }
+
+            _pendingVisualStates[bridge] = state;
+        }
+
+        /// <summary>同步托管敌人重新注册后的空间查询槽位。</summary>
+        internal void UpdateAgentSpatialSlot(EnemyFlockBridge bridge, int spatialSlot)
+        {
+            if (!CanUpdateAgent(bridge) ||
+                !_entityManager.HasComponent<EnemyFlockBridgeIndex>(bridge.Entity))
+            {
+                return;
+            }
+
             CompleteJobsBeforeStructuralChange();
-            EnemyFlockAgent agent = _entityManager.GetComponentData<EnemyFlockAgent>(bridge.Entity);
-            agent.SpeedMultiplier = Mathf.Max(0f, multiplier);
-            _entityManager.SetComponentData(bridge.Entity, agent);
+            EnemyFlockBridgeIndex index =
+                _entityManager.GetComponentData<EnemyFlockBridgeIndex>(bridge.Entity);
+            if (index.SpatialSlot == spatialSlot)
+            {
+                return;
+            }
+
+            index.SpatialSlot = spatialSlot;
+            _entityManager.SetComponentData(bridge.Entity, index);
         }
 
         /// <summary>累加一次待群游模拟消费的外部速度冲量。</summary>
@@ -186,6 +291,9 @@ namespace FlockingSystem.ECS
             _entityManager.SetComponentData(bridge.Entity, agent);
         }
 
+        /// <summary>切换代理是否暂停群游位移并接受外部 Transform 驱动。</summary>
+        /// <param name="bridge">目标敌人的 ECS 桥接。</param>
+        /// <param name="enabled">是否启用外部运动模式。</param>
         internal void UpdateAgentExternalMotion(EnemyFlockBridge bridge, bool enabled)
         {
             if (!CanUpdateAgent(bridge))
@@ -222,23 +330,33 @@ namespace FlockingSystem.ECS
             SetAgentPresentationColor(bridge, color);
         }
 
-        internal void UnbindAgent(EnemyFlockBridge bridge)
+        /// <summary>
+        /// 销毁 ECS 代理、释放群游槽位，并修正交换删除移动的托管 Transform 索引。
+        /// </summary>
+        /// <param name="bridge">要解除绑定的桥接组件。</param>
+        /// <param name="restoreSourceRenderer">是否恢复源预制体 Renderer。</param>
+        internal void UnbindAgent(
+            EnemyFlockBridge bridge,
+            bool restoreSourceRenderer = true)
         {
             if (bridge == null || bridge.Runtime != this)
             {
                 return;
             }
 
+            _pendingSpeedMultipliers.Remove(bridge);
+            _pendingVisualStates.Remove(bridge);
+
             if (_disposed)
             {
-                bridge.ClearEcsBinding();
+                bridge.ClearEcsBinding(restoreSourceRenderer);
                 return;
             }
 
             if (_world == null || !_world.IsCreated)
             {
                 _bridgesBySlot.Remove(bridge.Slot);
-                bridge.ClearEcsBinding();
+                bridge.ClearEcsBinding(restoreSourceRenderer);
                 return;
             }
 
@@ -257,7 +375,7 @@ namespace FlockingSystem.ECS
 
             _bridgesBySlot.Remove(slot);
             _freeSlots.Enqueue(slot);
-            bridge.ClearEcsBinding();
+            bridge.ClearEcsBinding(restoreSourceRenderer);
         }
 
         /// <summary>
@@ -289,297 +407,13 @@ namespace FlockingSystem.ECS
                 }
             }
 
-            if (_world != null && _world.IsCreated)
-            {
-                var graphics = _world.GetExistingSystemManaged<EntitiesGraphicsSystem>();
-                foreach (var visual in _visuals.Values)
-                {
-                    graphics?.UnregisterMaterial(visual.MaterialId);
-                    graphics?.UnregisterMesh(visual.MeshId);
-                }
-            }
-
-            foreach (var material in _runtimeMaterials)
-            {
-                UnityEngine.Object.Destroy(material);
-            }
-
-            _visuals.Clear();
-            _runtimeMaterials.Clear();
+            DisposeVisualResources();
+            _pendingSpeedMultipliers.Clear();
+            _pendingVisualStates.Clear();
             _disposed = true;
         }
 
-        private bool TryInitializeEcsWorld()
-        {
-            if (_flockSettings == null)
-            {
-                Debug.LogError("[EnemyFlock] EnemyFlockSettings 未配置，无法启动 ECS Flocking。");
-                return false;
-            }
-
-            if (_world != null && _world.IsCreated)
-            {
-                return true;
-            }
-
-            _world = World.DefaultGameObjectInjectionWorld;
-            if (_world == null || !_world.IsCreated)
-            {
-                if (!_warnedMissingWorld)
-                {
-                    Debug.LogError("[EnemyFlock] Default ECS World 不存在，无法启动 ECS Flocking。");
-                    _warnedMissingWorld = true;
-                }
-                return false;
-            }
-
-            _entityManager = _world.EntityManager;
-            _commitSystem = _world.GetOrCreateSystemManaged<EnemyFlockCommitSystem>();
-            _commitSystem.ConfigureAgentCapacity(_flockSettings.MaximumAgents);
-            return true;
-        }
-
-        private void EnsureWorldConfigEntity()
-        {
-            if (_configEntity != Entity.Null && _entityManager.Exists(_configEntity))
-            {
-                return;
-            }
-
-            using var query = _entityManager.CreateEntityQuery(ComponentType.ReadWrite<EnemyFlockWorldConfig>());
-            _configEntity = query.IsEmptyIgnoreFilter
-                ? _entityManager.CreateEntity(typeof(EnemyFlockWorldConfig))
-                : query.GetSingletonEntity();
-        }
-
-        private void UpdateWorldConfig()
-        {
-            Vector3 configuredLimits = _flockSettings.SwimLimits;
-            float3 limits = new float3(configuredLimits.x, configuredLimits.y, configuredLimits.z);
-            float3 extent = limits * 2f;
-            float largestExtent = Mathf.Max(extent.x, Mathf.Max(extent.y, extent.z));
-            float cellSize = _flockSettings.GridCellSize > 0f
-                ? _flockSettings.GridCellSize
-                : Mathf.Max(
-                    Mathf.Max(_maximumNeighbourDistance, _maximumSeparationDistance),
-                    largestExtent / _flockSettings.GridCellsPerAxis);
-            int maximumDimension = _flockSettings.GridCellsPerAxis;
-            int3 dimensions = new int3(
-                Mathf.Clamp(Mathf.CeilToInt(extent.x / cellSize), 1, maximumDimension),
-                Mathf.Clamp(Mathf.CeilToInt(extent.y / cellSize), 1, maximumDimension),
-                Mathf.Clamp(Mathf.CeilToInt(extent.z / cellSize), 1, maximumDimension));
-            Vector3 configuredCenter = _flockSettings.SwimCenter;
-
-            _entityManager.SetComponentData(_configEntity, new EnemyFlockWorldConfig
-            {
-                SwimCenter = new float3(configuredCenter.x, configuredCenter.y, configuredCenter.z),
-                SwimLimits = limits,
-                GridOrigin = new float3(configuredCenter.x, configuredCenter.y, configuredCenter.z) - limits,
-                GridCellSize = cellSize,
-                GridDimensions = dimensions,
-                GridCellCount = dimensions.x * dimensions.y * dimensions.z,
-                GoalChangeChance = _flockSettings.GoalChangeChance,
-                RandomSeed = _flockSettings.RandomSeed,
-                AgentCapacity = _flockSettings.MaximumAgents,
-                MaximumNeighbourCandidates = _flockSettings.MaximumNeighbourCandidates,
-                MaxDeltaTime = _flockSettings.MaxDeltaTime,
-                CohesionWeight = _flockSettings.CohesionWeight,
-                AlignmentWeight = _flockSettings.AlignmentWeight,
-                GoalWeight = _flockSettings.GoalWeight,
-                SeparationWeight = _flockSettings.SeparationWeight,
-                MaxAcceleration = _flockSettings.MaxAcceleration,
-                BoundaryWeight = _flockSettings.BoundaryWeight,
-                BoundaryMargin = _flockSettings.BoundaryMargin,
-                OutsideBoundsRotationMultiplier = _flockSettings.OutsideBoundsRotationMultiplier,
-            });
-        }
-
-        private bool TryGetVisualDefinition(
-            GameObject sourcePrefab,
-            int visualIndex,
-            out EnemyFlockVisual visual)
-        {
-            if (_visuals.TryGetValue(visualIndex, out visual))
-            {
-                return true;
-            }
-
-            var graphics = _world.GetExistingSystemManaged<EntitiesGraphicsSystem>();
-            if (graphics == null)
-            {
-                if (!_warnedMissingGraphics)
-                {
-                    Debug.LogError("[EnemyFlock] Entities Graphics System 不存在，无法启动 ECS Flocking。");
-                    _warnedMissingGraphics = true;
-                }
-                return false;
-            }
-
-            MeshFilter meshFilter = sourcePrefab.GetComponentInChildren<MeshFilter>(true);
-            MeshRenderer renderer = meshFilter != null
-                ? meshFilter.GetComponent<MeshRenderer>()
-                : sourcePrefab.GetComponentInChildren<MeshRenderer>(true);
-            if (meshFilter == null || renderer == null || meshFilter.sharedMesh == null || renderer.sharedMaterial == null)
-            {
-                Debug.LogError($"[EnemyFlock] {sourcePrefab.name} 缺少 MeshFilter/MeshRenderer，无法创建 ECS Enemy。");
-                return false;
-            }
-
-            Material material = CreateFlockRenderMaterial(renderer.sharedMaterial, visualIndex);
-            if (material == null)
-            {
-                return false;
-            }
-
-            BatchMeshID meshId = graphics.RegisterMesh(meshFilter.sharedMesh);
-            BatchMaterialID materialId = graphics.RegisterMaterial(material);
-            if (meshId.Equals(BatchMeshID.Null) || materialId.Equals(BatchMaterialID.Null))
-            {
-                if (!materialId.Equals(BatchMaterialID.Null))
-                {
-                    graphics.UnregisterMaterial(materialId);
-                }
-
-                if (!meshId.Equals(BatchMeshID.Null))
-                {
-                    graphics.UnregisterMesh(meshId);
-                }
-                UnityEngine.Object.Destroy(material);
-                return false;
-            }
-
-            Transform model = meshFilter.transform;
-            visual = new EnemyFlockVisual
-            {
-                MeshId = meshId,
-                MaterialId = materialId,
-                BaseColor = ToLinearColor(material),
-                PostTransform = new PostTransformMatrix
-                {
-                    Value = float4x4.TRS(
-                        new float3(model.localPosition.x, model.localPosition.y, model.localPosition.z),
-                        new quaternion(model.localRotation.x, model.localRotation.y, model.localRotation.z, model.localRotation.w),
-                        new float3(model.localScale.x, model.localScale.y, model.localScale.z)),
-                },
-            };
-            _visuals.Add(visualIndex, visual);
-            _runtimeMaterials.Add(material);
-            return true;
-        }
-
-        private Entity CreateAgentPrototype(EnemyFlockVisual visual)
-        {
-            Entity entity = _entityManager.CreateEntity();
-            _entityManager.AddComponentData(entity, new LocalTransform
-            {
-                Position = float3.zero,
-                Rotation = quaternion.identity,
-                Scale = 1f,
-            });
-            _entityManager.AddComponentData(entity, new EnemyFlockAgent());
-            _entityManager.AddComponentData(entity, new EnemyFlockNextPose
-            {
-                Position = float3.zero,
-                Rotation = quaternion.identity,
-            });
-            _entityManager.AddComponentData(entity, new EnemyFlockBridgeIndex { Value = -1 });
-            _entityManager.AddComponentData(entity, new EnemyFlockActive());
-            _entityManager.AddChunkComponentData<EnemyFlockChunkGoal>(entity);
-            _entityManager.SetChunkComponentData(_entityManager.GetChunk(entity), new EnemyFlockChunkGoal
-            {
-                GoalPosition = new float3(
-                    _flockSettings.SwimCenter.x,
-                    _flockSettings.SwimCenter.y,
-                    _flockSettings.SwimCenter.z),
-                RandomState = 0u,
-                SeedEntityIndex = -1,
-            });
-
-            var description = new RenderMeshDescription(
-                ShadowCastingMode.Off,
-                receiveShadows: false,
-                motionVectorGenerationMode: MotionVectorGenerationMode.Camera,
-                layer: 6,
-                renderingLayerMask: 0xffffffff,
-                lightProbeUsage: LightProbeUsage.Off);
-            RenderMeshUtility.AddComponents(
-                entity,
-                _entityManager,
-                description,
-                new MaterialMeshInfo(visual.MaterialId, visual.MeshId));
-            _entityManager.AddComponentData(
-                entity,
-                new URPMaterialPropertyBaseColor { Value = visual.BaseColor });
-            _entityManager.AddComponentData(entity, visual.PostTransform);
-            _entityManager.SetComponentEnabled<EnemyFlockActive>(entity, false);
-            _entityManager.SetComponentEnabled<MaterialMeshInfo>(entity, false);
-            return entity;
-        }
-
-        private Material CreateFlockRenderMaterial(Material source, int visualIndex)
-        {
-            Shader shader = Shader.Find("Custom/EnemyFlockToon") ?? Shader.Find("Universal Render Pipeline/Lit");
-            if (shader == null)
-            {
-                return null;
-            }
-
-            var material = new Material(shader)
-            {
-                name = $"EnemyFlockMaterial_{visualIndex}",
-                enableInstancing = true,
-            };
-
-            CopyColor(source, material, "_BaseColor");
-            CopyColor(source, material, "_ShadowColor");
-            CopyColor(source, material, "_SpecularColor");
-            CopyColor(source, material, "_RimColor");
-            CopyFloat(source, material, "_Glossiness");
-            CopyFloat(source, material, "_RimPower");
-            CopyFloat(source, material, "_RimThreshold");
-            CopyFloat(source, material, "_ShadowStep");
-            return material;
-        }
-
-        private void SetEntityFlockData(
-            EnemyFlockBridge bridge,
-            EnemyFlockProfile profile,
-            EnemyFlockVisual visual,
-            Vector3 position,
-            Quaternion rotation)
-        {
-            float3 entityPosition = new float3(position.x, position.y, position.z);
-            quaternion entityRotation = new quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
-            float seedRange = Mathf.Max(0.01f, profile.MaxSpeed - profile.MinSpeed);
-            float speed = profile.MinSpeed + Mathf.Abs((bridge.Slot * 17.13f) % seedRange);
-            speed = Mathf.Clamp(speed, profile.MinSpeed, profile.MaxSpeed);
-
-            _entityManager.SetComponentData(bridge.Entity, new LocalTransform
-            {
-                Position = entityPosition,
-                Rotation = entityRotation,
-                Scale = 1f,
-            });
-            _entityManager.SetComponentData(bridge.Entity, new EnemyFlockNextPose
-            {
-                Position = entityPosition,
-                Rotation = entityRotation,
-            });
-            EnemyFlockAgent agent = profile.CreateAgentData(speed);
-            agent.Velocity = math.mul(
-                entityRotation,
-                new float3(0f, 0f, speed));
-            _entityManager.SetComponentData(bridge.Entity, agent);
-            _entityManager.SetComponentData(bridge.Entity, new EnemyFlockBridgeIndex { Value = bridge.Slot });
-            _entityManager.SetComponentData(bridge.Entity, visual.PostTransform);
-            _entityManager.SetComponentData(bridge.Entity, new MaterialMeshInfo(visual.MaterialId, visual.MeshId));
-            _entityManager.SetComponentData(
-                bridge.Entity,
-                new URPMaterialPropertyBaseColor { Value = visual.BaseColor });
-            _entityManager.SetComponentEnabled<EnemyFlockActive>(bridge.Entity, true);
-            _entityManager.SetComponentEnabled<MaterialMeshInfo>(bridge.Entity, true);
-        }
-
+        /// <summary>优先复用已释放槽位，否则分配下一个连续槽位。</summary>
         private int AllocateSlot()
         {
             if (_freeSlots.Count > 0)
@@ -590,6 +424,7 @@ namespace FlockingSystem.ECS
             return _nextSlot < _flockSettings.MaximumAgents ? _nextSlot++ : -1;
         }
 
+        /// <summary>取得任意仍绑定的桥接，供 Dispose 循环解除全部代理。</summary>
         private EnemyFlockBridge GetAnyBridge()
         {
             foreach (var bridge in _bridgesBySlot.Values)
@@ -600,27 +435,17 @@ namespace FlockingSystem.ECS
             return null;
         }
 
+        /// <summary>结构化修改或主线程读取前等待所有 ECS Job 完成。</summary>
         private void CompleteJobsBeforeStructuralChange()
         {
+            using var profilerScope = CompleteJobsMarker.Auto();
             if (_world != null && _world.IsCreated)
             {
                 _entityManager.CompleteAllTrackedJobs();
             }
         }
 
-        private static float4 ToLinearColor(Material material)
-        {
-            Color color = material.HasProperty("_BaseColor")
-                ? material.GetColor("_BaseColor")
-                : Color.white;
-            Color linearColor = color.linear;
-            return new float4(
-                linearColor.r,
-                linearColor.g,
-                linearColor.b,
-                linearColor.a);
-        }
-
+        /// <summary>检查桥接仍拥有可写入的活动 ECS 代理。</summary>
         private bool CanUpdateAgent(EnemyFlockBridge bridge)
         {
             return !_disposed
@@ -632,26 +457,55 @@ namespace FlockingSystem.ECS
                 && _entityManager.HasComponent<EnemyFlockAgent>(bridge.Entity);
         }
 
+        /// <summary>检查代理存在材质颜色组件且可以安全更新表现。</summary>
         private bool CanUpdatePresentation(EnemyFlockBridge bridge)
         {
             return CanUpdateAgent(bridge)
                 && _entityManager.HasComponent<URPMaterialPropertyBaseColor>(bridge.Entity);
         }
 
-        private static void CopyColor(Material source, Material target, string property)
+        /// <summary>把缓存的视觉状态写入 Entities Graphics 实例属性。</summary>
+        private void ApplyVisualState(
+            EnemyFlockBridge bridge,
+            EnemyFlockVisualState state)
         {
-            if (source.HasProperty(property) && target.HasProperty(property))
+            if (!CanUpdateAgent(bridge))
             {
-                target.SetColor(property, source.GetColor(property));
+                return;
+            }
+
+            SetComponentIfPresent(
+                bridge.Entity,
+                new URPMaterialPropertyBaseColor { Value = state.BaseColor });
+            SetComponentIfPresent(
+                bridge.Entity,
+                new EnemyFlockHealth01Property { Value = Mathf.Clamp01(state.Health01) });
+            SetComponentIfPresent(
+                bridge.Entity,
+                new EnemyFlockHitFlashProperty { Value = Mathf.Clamp01(state.HitFlash) });
+            SetComponentIfPresent(
+                bridge.Entity,
+                new EnemyFlockDeathProgressProperty { Value = Mathf.Clamp01(state.DeathProgress) });
+            SetComponentIfPresent(
+                bridge.Entity,
+                new EnemyFlockCrackSeedProperty { Value = state.CrackSeed });
+            SetComponentIfPresent(
+                bridge.Entity,
+                new EnemyFlockCrackColorProperty { Value = state.CrackColor });
+            SetComponentIfPresent(
+                bridge.Entity,
+                new EnemyFlockEmissionColorProperty { Value = state.EmissionColor });
+        }
+
+        /// <summary>仅在原型包含指定材质属性时写入实例数据。</summary>
+        private void SetComponentIfPresent<T>(Entity entity, T value)
+            where T : unmanaged, IComponentData
+        {
+            if (_entityManager.HasComponent<T>(entity))
+            {
+                _entityManager.SetComponentData(entity, value);
             }
         }
 
-        private static void CopyFloat(Material source, Material target, string property)
-        {
-            if (source.HasProperty(property) && target.HasProperty(property))
-            {
-                target.SetFloat(property, source.GetFloat(property));
-            }
-        }
     }
 }
