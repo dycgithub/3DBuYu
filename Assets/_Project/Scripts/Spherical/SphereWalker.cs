@@ -23,6 +23,7 @@ public class SphereWalker : MonoBehaviour
     private IEnemyPopulationService _population;
     private ICombatPhaseService _phase;
     private System.IDisposable _populationStarted;
+    private System.IDisposable _difficultyChanged;
     private float _initialRadius = 15f;
     private float _manualOffset;
 
@@ -33,12 +34,25 @@ public class SphereWalker : MonoBehaviour
         _population = population;
         _phase = phase;
         _populationStarted?.Dispose();
-        _populationStarted = population.OnPopulationStarted.Subscribe(_ =>
-        {
-            _initialRadius = 15f + (int)population.Difficulty;
-            _manualOffset = 0f;
-            ApplyRadius(_initialRadius);
-        });
+        _difficultyChanged?.Dispose();
+        _populationStarted = population.OnPopulationStarted.Subscribe(_ => HandlePopulationStarted());
+        _difficultyChanged = population.OnDifficultyChanged.Subscribe(HandleDifficultyChanged);
+    }
+
+    /// <summary>开局时同步初始难度轨道并清除上一局的手动偏移。</summary>
+    private void HandlePopulationStarted()
+    {
+        _initialRadius = 15f + (int)_population.Difficulty;
+        _manualOffset = 0f;
+        ApplyRadius(_initialRadius);
+    }
+
+    /// <summary>难度切换后更新自动轨道基准并保留玩家手动偏移。</summary>
+    /// <param name="difficulty">人口服务成功应用的难度配置。</param>
+    private void HandleDifficultyChanged(GameSystem.DifficultyConfig difficulty)
+    {
+        _initialRadius = 15f + (int)difficulty.Level;
+        ApplyRadius(GetAutomaticRadius() + _manualOffset);
     }
 
     /// <summary>即使玩家没有输入也平滑贴合轨道；暂停时保持当前位置。</summary>
@@ -57,8 +71,12 @@ public class SphereWalker : MonoBehaviour
         return _initialRadius + Mathf.Max(0f, populationRadiusBonus.Evaluate(_population?.EnemiesAlive ?? 0));
     }
 
-    /// <summary>组件销毁时解除数量事件订阅。</summary>
-    private void OnDestroy() => _populationStarted?.Dispose();
+    /// <summary>组件销毁时解除人口开局和难度切换订阅。</summary>
+    private void OnDestroy()
+    {
+        _populationStarted?.Dispose();
+        _difficultyChanged?.Dispose();
+    }
 
     /// <summary>初始化时将玩家贴合当前轨道。</summary>
     private void Start()

@@ -23,7 +23,7 @@ namespace Play
         /// <summary>端口跟踪目标的旋转速度，单位为度/秒。</summary>
         [Header("瞄准")]
         [Tooltip("端口跟踪目标的旋转速度（度/秒）。")]
-        [Range(1f, 60f)]
+        [Range(1f, 120f)]
         public float trackingSpeed = 10f;
 
         [Header("基础攻击")]
@@ -34,6 +34,10 @@ namespace Play
         [Tooltip("单个投射物允许的基础最大距离，单位为世界单位。")]
         [Min(0f)]
         public float baseRange = 50f;
+
+        [Tooltip("玩家投射物沿发射方向的生成偏移，不改变发射点位置。")]
+        [Min(0f)]
+        public float projectileSpawnOffset = 0.45f;
 
         [Tooltip("端口每秒允许提交的基础攻击次数。")]
         [Min(0.001f)]

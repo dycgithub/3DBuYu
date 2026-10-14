@@ -8,46 +8,74 @@ namespace Play
 {
     /// <summary>
     /// 将玩家的能量资源适配为通用战斗目标。
-    /// 敌人不需要知道玩家控制器或能量服务的具体实现。
+    /// Buff 生命周期仅通过注入的场景级服务登记、注销和查询。
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class PlayerCombatTarget : MonoBehaviour, IPlayerCombatTarget, IBuffTarget, IDamageRequestReceiver
     {
         [Inject] private IEnergyService _energy;
         [Inject] private IBuffService _buffService;
-
-        // 仅供未经过容器的编辑器测试使用；正式运行时由 GameLoop 注入场景级服务。
-        private static readonly BuffManner EditorFallbackBuffManner = new();
+        private bool _energyEventSubscribed;
 
         /// <summary>玩家当前是否仍可作为战斗目标。</summary>
         public bool IsAlive => gameObject.activeInHierarchy &&
             (_energy == null || !_energy.IsDepleted);
 
-        /// <summary>启用时向场景级 BuffManner 登记玩家目标。</summary>
+        /// <summary>启用时订阅能量耗尽并登记存活玩家。</summary>
         private void OnEnable()
         {
+            SubscribeEnergyDepleted();
             RegisterBuffTarget();
         }
 
-        /// <summary>注入完成后再次登记，覆盖容器晚于 OnEnable 注入的场景。</summary>
+        /// <summary>注入完成后订阅能量并再次登记，覆盖容器晚于 OnEnable 注入的场景。</summary>
         private void Start()
         {
+            SubscribeEnergyDepleted();
             RegisterBuffTarget();
         }
 
-        /// <summary>禁用时从场景级 BuffManner 注销玩家目标。</summary>
+        /// <summary>禁用时解除能量订阅并注销玩家 Buff。</summary>
         private void OnDisable()
         {
-            GetBuffService()?.UnregisterTarget(this);
+            UnsubscribeEnergyDepleted();
+            _buffService?.UnregisterTarget(this);
+        }
+
+        /// <summary>能量耗尽时注销玩家 Buff，回收附着视效。</summary>
+        private void OnEnergyDepleted()
+        {
+            _buffService?.UnregisterTarget(this);
+        }
+
+        private void SubscribeEnergyDepleted()
+        {
+            if (_energy == null || _energyEventSubscribed)
+            {
+                return;
+            }
+
+            _energy.EnergyDepleted += OnEnergyDepleted;
+            _energyEventSubscribed = true;
+        }
+
+        private void UnsubscribeEnergyDepleted()
+        {
+            if (_energy == null || !_energyEventSubscribed)
+            {
+                return;
+            }
+
+            _energy.EnergyDepleted -= OnEnergyDepleted;
+            _energyEventSubscribed = false;
         }
 
         /// <summary>返回玩家当前移动速度倍率。</summary>
         public float GetMovementSpeedMultiplier()
         {
             RegisterBuffTarget();
-            IBuffService buffService = GetBuffService();
-            return buffService != null
-                ? buffService.GetModifierMultiplier(
+            return _buffService != null
+                ? _buffService.GetModifierMultiplier(
                     this,
                     BuffModifierType.MovementSpeedMultiplier)
                 : 1f;
@@ -115,7 +143,7 @@ namespace Play
             }
 
             RegisterBuffTarget();
-            GetBuffService()?.ApplyBuff(this, definition, sourceInstanceId);
+            _buffService?.ApplyBuff(this, definition, sourceInstanceId);
         }
 
         /// <summary>
@@ -132,9 +160,8 @@ namespace Play
             }
 
             RegisterBuffTarget();
-            IBuffService buffService = GetBuffService();
-            return buffService != null &&
-                buffService.TryApplyBuffIfAbsent(this, definition, sourceInstanceId);
+            return _buffService != null &&
+                _buffService.TryApplyBuffIfAbsent(this, definition, sourceInstanceId);
         }
 
         /// <summary>玩家目标始终允许接收有害 Buff。</summary>
@@ -147,21 +174,10 @@ namespace Play
         {
         }
 
-        /// <summary>向场景级 BuffManner 登记玩家目标。</summary>
+        /// <summary>向场景级 BuffService 登记玩家目标。</summary>
         private void RegisterBuffTarget()
         {
-            GetBuffService()?.RegisterTarget(this);
-        }
-
-        /// <summary>取得容器服务，编辑器旧测试使用共享回退实例。</summary>
-        private IBuffService GetBuffService()
-        {
-            if (_buffService != null)
-            {
-                return _buffService;
-            }
-
-            return !Application.isPlaying ? EditorFallbackBuffManner : null;
+            _buffService?.RegisterTarget(this);
         }
     }
 }

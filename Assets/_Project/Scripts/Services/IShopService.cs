@@ -19,7 +19,13 @@ namespace Services
         /// <summary>将商品放回商店并退还其价格。</summary>
         void Refund(ItemVM item);
 
-        /// <summary>清空商店网格并重新填充商品,直至网格填满(目录用尽则停止)。</summary>
+        /// <summary>初始化免费刷新；完整布局准备成功后替换，失败保留旧商品。</summary>
         void RefreshShop(GridView shopGrid);
+
+        /// <summary>当前商店是否正在准备或提交刷新。</summary>
+        bool IsRefreshing { get; }
+
+        /// <summary>花费一千永久积分刷新；拖拽中或新布局准备失败时原店与积分不变。</summary>
+        bool TryRefreshShop(GridView shopGrid, IInventoryDragState dragState);
     }
 }

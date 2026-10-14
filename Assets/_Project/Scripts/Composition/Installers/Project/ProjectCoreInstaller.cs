@@ -10,7 +10,7 @@ using VContainer.Unity;
 public sealed class ProjectCoreInstaller : IInstaller
 {
     /// <summary>
-    /// 注册全局通知、对象池和设置服务。
+    /// 注册全局通知、对象池和设置服务，并提供发射器攻击模式。
     /// </summary>
     /// <param name="builder">ProjectLifetimeScope 使用的容器构建器。</param>
     public void Install(IContainerBuilder builder)
@@ -21,6 +21,8 @@ public sealed class ProjectCoreInstaller : IInstaller
         builder.Register<GameObjectPoolService>(Lifetime.Singleton)
             .As<IGameObjectPool>()
             .AsSelf();
-        builder.Register<OptionsService>(Lifetime.Singleton).AsSelf();
+        builder.Register<OptionsService>(Lifetime.Singleton)
+            .As<ITransmitterAttackModeProvider>()
+            .AsSelf();
     }
 }

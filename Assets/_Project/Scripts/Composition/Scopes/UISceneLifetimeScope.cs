@@ -17,7 +17,7 @@ public class UISceneLifetimeScope : LifetimeScope
     [SerializeField] private bool selectedTooltipEnabled = true;
 
     /// <summary>
-    /// 注册基地场景范围内的背包和提示交互服务。
+    /// 注册基地场景的背包、提示及序列化商店刷新控件。
     /// </summary>
     protected override void Configure(IContainerBuilder builder)
     {
@@ -27,6 +27,7 @@ public class UISceneLifetimeScope : LifetimeScope
             SelectedEnabled = selectedTooltipEnabled,
         }).Install(builder);
         builder.RegisterComponentInHierarchy<PointsDisplayView>().AsSelf();
+        builder.RegisterComponentInHierarchy<InventorySystem.Shop.ShopRefreshView>().AsSelf();
         builder.RegisterComponentInHierarchy<TutorialPanelController>().AsSelf();
     }
 

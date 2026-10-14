@@ -22,8 +22,8 @@ namespace CombatSystem
         public BuffModifierType ModifierType;
 
         /// <summary>
-        /// 可选的叠层组标识。为空时为兼容旧资产回退到 ModifierType。
-        /// 相同来源、相同叠层组的 Buff 才会共享刷新或叠层状态。
+        /// 可选的叠层组标识。合并键由来源、ModifierType 和叠层组共同组成。
+        /// 为空时仅按相同来源与 ModifierType 合并。
         /// </summary>
         public string StackGroupId;
 
@@ -42,14 +42,16 @@ namespace CombatSystem
         [Min(0f)]
         public float HealingPerSecond;
 
-        /// <summary>同来源、同叠层组 Buff 再次施加时使用的叠加策略。</summary>
+        /// <summary>
+        /// 同来源、同 ModifierType 且同 StackGroupId 的 Buff 重复施加策略；组标识为空时按来源与 ModifierType 合并。
+        /// </summary>
         public BuffStackPolicy StackPolicy = BuffStackPolicy.RefreshDuration;
 
         /// <summary>该 Buff 允许达到的最大层数。</summary>
         [FormerlySerializedAs("MaxStacks")]
         [Min(1)] public int MaximumStackCount = 1;
 
-        /// <summary>可选的 Buff 表现预制体。</summary>
+        /// <summary>可选的 Buff 持续视效；活动期间附着于目标，结束时归还对象池。</summary>
         public GameObject VisualEffectPrefab;
     }
 }

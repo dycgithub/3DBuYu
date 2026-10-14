@@ -1,7 +1,7 @@
 using System;
 using EnemySystem;
+using GeometricMotion;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 namespace FlockingSystem.ECS
 {
@@ -22,6 +22,10 @@ namespace FlockingSystem.ECS
         [Header("Goal")]
         [SerializeField, Range(0f, 1f)] private float goalChangeChance = 0.005f;
         [SerializeField] private uint randomSeed = 0x6D2B79F5u;
+
+        [Header("Motion Presentation")]
+        [Tooltip("Flocking 实体使用的几何运动表现配置。为空时使用代码默认值。")]
+        [SerializeField] private GeometricMotionProfileSO geometricMotionProfile;
 
         [Header("Grid")]
         [Tooltip("设为 0 时按区域和轴数自动计算。")]
@@ -70,7 +74,7 @@ namespace FlockingSystem.ECS
             MaxSpeed = 5f,
         };
 
-        [SerializeField] private ProfileSettings slow = new()
+        [SerializeField] private ProfileSettings tank = new()
         {
             VisualIndex = 2,
             NeighbourDistance = 5f,
@@ -91,6 +95,9 @@ namespace FlockingSystem.ECS
 
         /// <summary>每个模拟步改变 Chunk 目标点的概率。</summary>
         public float GoalChangeChance => Mathf.Clamp01(goalChangeChance);
+
+        /// <summary>Flocking 实体使用的几何运动表现配置；为空时由调用方使用默认配置。</summary>
+        public GeometricMotionProfileSO GeometricMotionProfile => geometricMotionProfile;
 
         /// <summary>生成 Chunk 目标随机状态的非零世界种子。</summary>
         public uint RandomSeed => randomSeed == 0 ? 1u : randomSeed;
@@ -149,7 +156,7 @@ namespace FlockingSystem.ECS
             ProfileSettings profile = enemyType switch
             {
                 EnemyType.Fast => fast,
-                EnemyType.Tank => slow,
+                EnemyType.Tank => tank,
                 _ => normal,
             };
 

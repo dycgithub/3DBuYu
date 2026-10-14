@@ -1,4 +1,5 @@
 using EnemySystem;
+using GeometricMotion;
 using Unity.Entities;
 using Unity.Mathematics;
 using Unity.Rendering;
@@ -8,7 +9,7 @@ using UnityEngine.Rendering;
 
 namespace FlockingSystem.ECS
 {
-    /// <summary>创建 ECS 原型并写入单个代理的初始状态。</summary>
+    /// <summary>创建 ECS 原型并初始化单个代理的群游姿态和移动所有权。</summary>
     public sealed partial class EnemyFlockRuntimeService
     {
         /// <summary>创建只包含完整组件布局的实体原型；具体视觉和状态由实例覆盖。</summary>
@@ -75,7 +76,11 @@ namespace FlockingSystem.ECS
             _entityManager.AddComponentData(
                 entity,
                 new EnemyFlockEmissionColorProperty { Value = visual.EmissionColor });
-            _entityManager.AddComponentData(entity, visual.PostTransform);
+            GeometricMotionEntitySetup.AddComponents(
+                _entityManager,
+                entity,
+                GetGeometricMotionConfig(),
+                visual.PostTransform.Value);
             _entityManager.SetComponentEnabled<EnemyFlockActive>(entity, false);
             _entityManager.SetComponentEnabled<MaterialMeshInfo>(entity, false);
             return entity;
@@ -91,6 +96,8 @@ namespace FlockingSystem.ECS
         {
             float3 entityPosition = new float3(position.x, position.y, position.z);
             quaternion entityRotation = new quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
+            ForgetPendingMotion(bridge);
+            bridge.SetMotionMode(EnemyFlockMotionMode.Flocking);
             float seedRange = Mathf.Max(0.01f, profile.MaxSpeed - profile.MinSpeed);
             float speed = profile.MinSpeed + Mathf.Abs(
                 (bridge.Slot * InitialSpeedSeedStep) % seedRange);
@@ -108,6 +115,8 @@ namespace FlockingSystem.ECS
                 Rotation = entityRotation,
             });
             EnemyFlockAgent agent = profile.CreateAgentData(speed);
+            agent.MotionMode = EnemyFlockMotionMode.Flocking;
+            agent.DirectedRotation = entityRotation;
             agent.Velocity = math.mul(
                 entityRotation,
                 new float3(0f, 0f, speed));
@@ -117,7 +126,10 @@ namespace FlockingSystem.ECS
                 FlockSlot = bridge.Slot,
                 SpatialSlot = bridge.GetComponent<Enemy>()?.SpatialSlot ?? -1,
             });
-            _entityManager.SetComponentData(bridge.Entity, visual.PostTransform);
+            GeometricMotionEntitySetup.Reset(
+                _entityManager,
+                bridge.Entity,
+                visual.PostTransform.Value);
             _entityManager.SetComponentData(
                 bridge.Entity,
                 new MaterialMeshInfo(visual.MaterialId, visual.MeshId));
@@ -144,6 +156,14 @@ namespace FlockingSystem.ECS
                 new EnemyFlockEmissionColorProperty { Value = visual.EmissionColor });
             _entityManager.SetComponentEnabled<EnemyFlockActive>(bridge.Entity, true);
             _entityManager.SetComponentEnabled<MaterialMeshInfo>(bridge.Entity, true);
+        }
+
+        /// <summary>读取当前 Flocking 世界使用的几何运动配置。</summary>
+        private GeometricMotionConfig GetGeometricMotionConfig()
+        {
+            return _flockSettings.GeometricMotionProfile != null
+                ? _flockSettings.GeometricMotionProfile.CreateConfig()
+                : GeometricMotionConfig.Default;
         }
 
         /// <summary>为同一个对象池实例生成稳定的裂纹种子。</summary>

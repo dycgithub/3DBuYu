@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using EffectSystem;
+using EnemySystem;
 using R3;
 using Services;
 using Unity.Profiling;
@@ -9,7 +10,7 @@ using UnityEngine;
 
 namespace EnemySystem.Spawning
 {
-    /// <summary>所有分类共享 2000 存活上限；死亡立即释放人口，表现结束后归还对象池。</summary>
+    /// <summary>所有分类共享 SO 配置的存活上限；死亡立即释放人口，表现结束后归还对象池。</summary>
     public class EnemySpawner : IEnemySpawner, IEnemyChildSpawner, ITickable, IDisposable
     {
         private static readonly ProfilerMarker TickMarker =
@@ -17,9 +18,9 @@ namespace EnemySystem.Spawning
 
         private readonly EnemyFactory _factory;
         private readonly ISpawnPositionProvider _spawnPositionProvider;
+        private readonly EnemyPopulationSettingsSO _populationSettings;
         private readonly IEffectService _effectService;
         private readonly HashSet<Enemy> _activeEnemies = new();
-        private readonly Dictionary<Enemy, EnemySpawnCategory> _categories = new();
         private readonly int[] _categoryCounts = new int[4];
         private readonly HashSet<Enemy> _pendingRelease = new();
         private readonly Dictionary<Enemy, float> _pendingReleaseTimes = new();
@@ -36,13 +37,16 @@ namespace EnemySystem.Spawning
         /// </summary>
         /// <param name="factory">负责创建和回收敌人的工厂。</param>
         /// <param name="spawnPositionProvider">负责计算敌人出生位置的服务。</param>
+        /// <param name="populationSettings">所有敌人分类共享的存活容量。</param>
         public EnemySpawner(
             EnemyFactory factory,
             ISpawnPositionProvider spawnPositionProvider,
+            EnemyPopulationSettingsSO populationSettings,
             IEffectService effectService = null)
         {
             _factory = factory;
             _spawnPositionProvider = spawnPositionProvider;
+            _populationSettings = populationSettings;
             _effectService = effectService;
         }
 
@@ -53,15 +57,17 @@ namespace EnemySystem.Spawning
         /// <param name="category">普通、精英或 Boss 的生成分类。</param>
         /// <param name="healthMultiplier">难度生命倍率。</param>
         /// <param name="speedMultiplier">难度速度倍率。</param>
+        /// <param name="initialRotation">本次生成使用的世界初始旋转。</param>
         /// <returns>实际生成成功时返回 true。</returns>
         public bool TrySpawnEnemy(
             Enemy prefab,
             EnemySpawnCategory category,
             float healthMultiplier,
-            float speedMultiplier)
+            float speedMultiplier,
+            Quaternion initialRotation)
         {
             if (_disposed || prefab == null || category == EnemySpawnCategory.Child ||
-                _activeEnemies.Count >= EnemyPopulationLimits.MaximumAlive)
+                _populationSettings == null || !_populationSettings.HasCapacity(_activeEnemies.Count))
             {
                 return false;
             }
@@ -69,8 +75,11 @@ namespace EnemySystem.Spawning
             Vector3 spawnPosition = _spawnPositionProvider.GetSpawnPosition();
             Enemy enemy = _factory.CreateEnemy(
                 prefab.gameObject,
+                category,
                 spawnPosition,
-                healthMultiplier, speedMultiplier);
+                healthMultiplier,
+                speedMultiplier,
+                initialRotation);
             if (enemy == null)
             {
                 return false;
@@ -78,14 +87,13 @@ namespace EnemySystem.Spawning
 
             enemy.OnDied += HandleEnemyDied;
             _activeEnemies.Add(enemy);
-            _categories.Add(enemy, category);
             _categoryCounts[(int)category]++;
             _activeEnemyCount.Value = _activeEnemies.Count;
             PlaySpawnEffect(spawnPosition);
             return true;
         }
 
-        /// <summary>子敌人不占普通目标，但与母体共享总存活上限。</summary>
+        /// <summary>子敌人不占普通目标、沿用预制体旋转，但与母体共享总存活上限。</summary>
         public Enemy TrySpawnChild(
             Enemy parent,
             Enemy prefab,
@@ -93,17 +101,19 @@ namespace EnemySystem.Spawning
             float healthMultiplier,
             float speedMultiplier)
         {
-            if (_disposed || parent == null || prefab == null ||
-                _activeEnemies.Count >= EnemyPopulationLimits.MaximumAlive)
+            if (_disposed || parent == null || prefab == null || _populationSettings == null ||
+                !_populationSettings.HasCapacity(_activeEnemies.Count))
             {
                 return null;
             }
 
             Enemy enemy = _factory.CreateEnemy(
                 prefab.gameObject,
+                EnemySpawnCategory.Child,
                 position,
                 healthMultiplier,
-                speedMultiplier);
+                speedMultiplier,
+                prefab.transform.rotation);
             if (enemy == null)
             {
                 return null;
@@ -111,7 +121,6 @@ namespace EnemySystem.Spawning
 
             enemy.OnDied += HandleEnemyDied;
             _activeEnemies.Add(enemy);
-            _categories.Add(enemy, EnemySpawnCategory.Child);
             _categoryCounts[(int)EnemySpawnCategory.Child]++;
             _activeEnemyCount.Value = _activeEnemies.Count;
             PlaySpawnEffect(position);
@@ -132,10 +141,7 @@ namespace EnemySystem.Spawning
         {
             enemy.OnDied -= HandleEnemyDied;
             _activeEnemies.Remove(enemy);
-            if (_categories.Remove(enemy, out EnemySpawnCategory category))
-            {
-                _categoryCounts[(int)category]--;
-            }
+            _categoryCounts[(int)enemy.SpawnCategory]--;
             // 与死亡表现的游戏时间保持一致；暂停期间保留完整的高亮时长。
             _pendingRelease.Add(enemy);
             _pendingReleaseTimes[enemy] = Time.time + enemy.DeathHighlightDuration;
@@ -200,7 +206,6 @@ namespace EnemySystem.Spawning
 
             _iterationBuffer.Clear();
             _activeEnemies.Clear();
-            _categories.Clear();
             System.Array.Clear(_categoryCounts, 0, _categoryCounts.Length);
             _activeEnemyCount.Value = 0;
         }

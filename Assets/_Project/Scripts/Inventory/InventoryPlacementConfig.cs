@@ -33,7 +33,7 @@ public class InventoryPlacementConfig : ScriptableObject
     }
 
     /// <summary>
-    /// 核心判定:形状覆盖的每格必须 ①在边界内 ②未被占用。
+    /// 核心判定:形状覆盖的每格必须在边界内，且只可被当前物品自身占用。
     /// col/row = 锚点(形状左上角)格子坐标。
     /// </summary>
     public bool Evaluate(GridVM grid, ItemVM item, int col, int row, out PlacementBlockReason reason)
@@ -60,7 +60,8 @@ public class InventoryPlacementConfig : ScriptableObject
         {
             int x = col + p.x + item.RotationOffset.x;
             int y = row + p.y + item.RotationOffset.y;
-            if (grid[x,y] != null)
+            ItemVM occupant = grid[x, y];
+            if (occupant != null && occupant != item)
             {
                 reason = PlacementBlockReason.Occupied;
                 return false;

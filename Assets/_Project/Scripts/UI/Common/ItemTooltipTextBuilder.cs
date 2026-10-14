@@ -7,7 +7,7 @@ using UnityEngine;
 namespace _Project.UI.Common
 {
     /// <summary>
-    /// 把 ItemVM 和战斗配置转换为 Tooltip 展示数据。
+    /// 把 ItemVM 和战斗配置转换为当前语言的 Tooltip 展示数据。
     /// 技能取自物品的有序数组，能量、次数和冷却按整卡共享配置显示一次。
     /// </summary>
     public static class ItemTooltipTextBuilder
@@ -44,17 +44,17 @@ namespace _Project.UI.Common
                 if (grant.AppliesToTransmitterLoadout
                     && !Mathf.Approximately(grant.TransmitterAdditiveDamageBonus, 0f))
                 {
-                    effects.Add($"发射器伤害 +{grant.TransmitterAdditiveDamageBonus.ToString("0.##", CultureInfo.InvariantCulture)}");
+                    effects.Add(L10n.Get("tooltip.transmitterDamage", grant.TransmitterAdditiveDamageBonus.ToString("0.##", CultureInfo.InvariantCulture)));
                 }
             }
 
             string footprint = item.Width > 0 && item.Height > 0
-                ? $"占用：{item.Width}×{item.Height} 格，共 {item.CoordinateSet.Count} 格 · 方向 {GridUtilities.RotationHelper.GetRotationAngle(item.Direction)}°"
-                : "占用：无";
+                ? L10n.Get("tooltip.footprint", item.Width, item.Height, item.CoordinateSet.Count, GridUtilities.RotationHelper.GetRotationAngle(item.Direction))
+                : L10n.Get("tooltip.noFootprint");
 
             bool hasPrice = gridType == GridType.Shop;
             string priceText = hasPrice
-                ? price <= 0 ? "免费" : $"{price} 积分"
+                ? price <= 0 ? L10n.Get("tooltip.free") : L10n.Get("tooltip.points", price)
                 : string.Empty;
 
             return new ItemTooltipContent(
@@ -75,8 +75,8 @@ namespace _Project.UI.Common
 
         /// <summary>将战斗配置作用范围转换为玩家可读文本。</summary>
         private static string FormatScope(CombatScope scope)
-            => scope == CombatScope.Central ? "作用范围：中心" :
-                scope == CombatScope.Transmitter ? "作用范围：发射器" : "作用范围：中心/发射器";
+            => L10n.Get(scope == CombatScope.Central ? "tooltip.centralScope" :
+                scope == CombatScope.Transmitter ? "tooltip.transmitterScope" : "tooltip.bothScopes");
 
         private static void AddAttackModifiers(
             TransmitterAttackModifierDefinitionSO[] modifiers,
@@ -89,13 +89,13 @@ namespace _Project.UI.Common
             {
                 TransmitterAttackModifierDefinitionSO modifier = modifiers[i];
                 if (modifier is AddPenetrationAttackModifierDefinitionSO penetration)
-                    destination.Add($"攻击穿透 {FormatSigned(penetration.AdditionalPenetrationCount)}");
+                    destination.Add(L10n.Get("tooltip.penetration", FormatSigned(penetration.AdditionalPenetrationCount)));
                 else if (modifier is AddProjectileCountAttackModifierDefinitionSO projectileCount)
-                    destination.Add($"额外弹丸 {FormatSigned(projectileCount.AdditionalProjectileCount)}");
+                    destination.Add(L10n.Get("tooltip.projectiles", FormatSigned(projectileCount.AdditionalProjectileCount)));
                 else if (modifier is MultiplyDamageAttackModifierDefinitionSO damage)
-                    destination.Add($"攻击伤害 ×{damage.DamageMultiplier.ToString("0.##", CultureInfo.InvariantCulture)}");
+                    destination.Add(L10n.Get("tooltip.damageMultiplier", damage.DamageMultiplier.ToString("0.##", CultureInfo.InvariantCulture)));
                 else if (modifier is AddDamageAttackModifierDefinitionSO damageBonus)
-                    destination.Add($"攻击伤害 +{damageBonus.DamageAmount.ToString("0.##", CultureInfo.InvariantCulture)}");
+                    destination.Add(L10n.Get("tooltip.damageBonus", damageBonus.DamageAmount.ToString("0.##", CultureInfo.InvariantCulture)));
             }
         }
 
@@ -113,7 +113,9 @@ namespace _Project.UI.Common
             {
                 if (skill != null)
                 {
-                    names.Add(string.IsNullOrWhiteSpace(skill.SkillIdentifier) ? "未命名技能" : skill.SkillIdentifier);
+                    names.Add(string.IsNullOrWhiteSpace(skill.SkillIdentifier)
+                        ? L10n.Get("tooltip.unnamedSkill")
+                        : L10n.GetOrDefault($"skill.{skill.SkillIdentifier}.name", skill.SkillIdentifier));
                 }
             }
             if (names.Count == 0)
@@ -125,7 +127,8 @@ namespace _Project.UI.Common
             float energy = grant?.EnergyCost ?? 0f;
             int uses = grant?.UseCount ?? 1;
             destination.Add(
-                $"获得技能：{string.Join("、", names)}（冷却 {cooldown.ToString("0.##", CultureInfo.InvariantCulture)} 秒，能量 {energy.ToString("0.##", CultureInfo.InvariantCulture)}，次数 {uses}）");
+                L10n.Get("tooltip.skills", string.Join(L10n.Get("tooltip.skillSeparator"), names),
+                    cooldown.ToString("0.##", CultureInfo.InvariantCulture), energy.ToString("0.##", CultureInfo.InvariantCulture), uses));
         }
 
         /// <summary>格式化整数增量并保留正数的加号。</summary>

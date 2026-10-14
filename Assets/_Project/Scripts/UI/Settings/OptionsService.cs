@@ -1,10 +1,13 @@
+using System;
+using CombatSystem;
 using GameSystem;
+using Services;
 using UnityEngine;
 
 /// <summary>
-/// 管理跨场景设置状态，并把设置立即应用到 Unity 和全局音频服务。
+/// 管理跨场景设置、语言和发射器攻击模式，并应用到 Unity 和全局服务。
 /// </summary>
-public sealed class OptionsService
+public sealed class OptionsService : ITransmitterAttackModeProvider
 {
     private const int UncappedFrameRate = -1;
     private const int MinimumFrameRate = 30;
@@ -15,6 +18,9 @@ public sealed class OptionsService
     /// <summary>当前已加载的设置数据。</summary>
     public SettingsData Current { get; }
 
+    /// <summary>当前发射器攻击模式。</summary>
+    public TransmitterAttackMode AttackMode => Current.attackMode;
+
     /// <summary>
     /// 创建设置服务并加载已有存档。
     /// </summary>
@@ -23,6 +29,12 @@ public sealed class OptionsService
     {
         _audioManager = audioManager;
         Current = SaveSystem.LoadSettings();
+        Current.languageCode = _Project.Localization.Implement.SavedLocaleSelector.Normalize(Current.languageCode);
+        if (!Enum.IsDefined(typeof(TransmitterAttackMode), Current.attackMode))
+        {
+            Current.attackMode = TransmitterAttackMode.Automatic;
+        }
+
         Apply();
     }
 
@@ -107,6 +119,19 @@ public sealed class OptionsService
         Save();
     }
 
+    /// <summary>设置唯一攻击输入模式并持久化。</summary>
+    /// <param name="mode">自动、按键、鼠标或标记目标攻击模式。</param>
+    public void SetAttackMode(TransmitterAttackMode mode)
+    {
+        if (!Enum.IsDefined(typeof(TransmitterAttackMode), mode))
+        {
+            return;
+        }
+
+        Current.attackMode = mode;
+        Save();
+    }
+
     /// <summary>
     /// 将设置开关和数值转换为 Unity 的目标帧率值。
     /// </summary>
@@ -123,6 +148,20 @@ public sealed class OptionsService
     private void Save()
     {
         SaveSystem.SaveSettings(Current);
+    }
+
+    /// <summary>切换官方 Localization 的选中语言并保存到现有设置存档。</summary>
+    /// <param name="locale">项目已配置的英文或简体中文语言。</param>
+    public void SetLanguage(UnityEngine.Localization.Locale locale)
+    {
+        if (locale == null || (locale.Identifier.Code != "en" && locale.Identifier.Code != "zh-Hans"))
+        {
+            return;
+        }
+
+        Current.languageCode = locale.Identifier.Code;
+        UnityEngine.Localization.Settings.LocalizationSettings.SelectedLocale = locale;
+        Save();
     }
 }
 

@@ -18,7 +18,7 @@ namespace _Project.Tests.CombatPlayground.Implement
         [SerializeField] private CombatEffectCatalogSO combatEffectCatalog;
         [SerializeField] private EnemyFlockSettingsSO enemyFlockSettings;
 
-        /// <summary>注册投射物、伤害、技能、Buff 和目标空间注册所需的最小服务集合。</summary>
+        /// <summary>注册实验场景技能、伤害、Buff、敌人表现和投射物所需服务。</summary>
         protected override void Configure(IContainerBuilder builder)
         {
             if (composition == null)
@@ -35,7 +35,14 @@ namespace _Project.Tests.CombatPlayground.Implement
 
             composition.Register(builder);
 
-            builder.RegisterEntryPoint<BuffManner>(Lifetime.Singleton)
+            builder.Register<DamageRequestProcessor>(Lifetime.Singleton)
+                .As<IDamageRequestProcessor>()
+                .As<IDamageEventSource>()
+                .AsSelf();
+            builder.Register<AttackInstanceIdGenerator>(Lifetime.Singleton)
+                .As<IAttackInstanceIdGenerator>()
+                .AsSelf();
+            builder.RegisterEntryPoint<BuffService>(Lifetime.Singleton)
                 .As<IBuffService>()
                 .AsSelf();
             builder.Register<CombatPlaygroundPhaseService>(Lifetime.Singleton)
@@ -47,6 +54,10 @@ namespace _Project.Tests.CombatPlayground.Implement
             builder.Register<EnergyService>(Lifetime.Singleton)
                 .As<Services.IEnergyService>()
                 .AsSelf();
+            builder.Register<SkillHand>(Lifetime.Singleton).AsSelf();
+            builder.Register<CombatPlaygroundInventory>(Lifetime.Singleton)
+                .As<ICombatItemConsumptionService>()
+                .AsSelf();
             builder.Register<CombatPlaygroundAttackModifiers>(Lifetime.Singleton)
                 .As<ITransmitterAttackModifierSource>()
                 .AsSelf();
@@ -55,8 +66,13 @@ namespace _Project.Tests.CombatPlayground.Implement
                 .As<ITransmitterGlobalEffectResetService>()
                 .AsSelf();
             builder.RegisterInstance(enemyFlockSettings).AsSelf();
+            builder.RegisterEntryPoint<EnemyFlockRuntimeService>(Lifetime.Singleton).AsSelf();
 
             new GameLoopProjectileInstaller().Install(builder);
+            builder.Register<UnityAttackClock>(Lifetime.Singleton).As<IAttackClock>();
+            builder.Register<AttackCooldownRegistry>(Lifetime.Singleton).AsSelf();
+            builder.Register<AttackDataBuilder>(Lifetime.Singleton).AsSelf();
+            builder.Register<AttackExecutor>(Lifetime.Singleton).AsSelf();
             builder.Register<TransmitterAttackBuildService>(Lifetime.Singleton).AsSelf();
             builder.Register<TransmitterAttackService>(Lifetime.Singleton)
                 .As<ITransmitterAttackService>()
@@ -69,6 +85,8 @@ namespace _Project.Tests.CombatPlayground.Implement
             builder.Register<SkillExecutor>(Lifetime.Singleton)
                 .As<ISkillExecutionService>()
                 .AsSelf();
+            builder.RegisterEntryPoint<SkillActivationService>(Lifetime.Singleton).AsSelf();
+            builder.RegisterEntryPoint<EnemySystem.Visual.EnemyVisualSystem>(Lifetime.Singleton).AsSelf();
 
             new GameLoopEffectInstaller(combatEffectCatalog, this).Install(builder);
         }

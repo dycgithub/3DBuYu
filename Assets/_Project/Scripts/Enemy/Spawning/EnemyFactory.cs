@@ -1,3 +1,4 @@
+using System;
 using FlockingSystem.ECS;
 using UnityEngine;
 using VContainer;
@@ -7,8 +8,7 @@ using EnemySystem.Components;
 namespace EnemySystem.Spawning
 {
     /// <summary>
-    /// 创建、初始化和释放敌人对象，并为每个敌人建立 ECS Flocking 绑定。
-    /// <para>当前敌人不包含战斗技能，本类不负责组合技能或注入技能依赖。</para>
+    /// 创建、初始化和释放敌人对象，并校验核心与类型专属机制组件。
     /// <para>本类不负责群游计算；群游行为由 <see cref="EnemyFlockRuntimeService" /> 负责。</para>
     /// </summary>
     public class EnemyFactory
@@ -34,14 +34,19 @@ namespace EnemySystem.Spawning
         /// 从对象池取得敌人，激活查询注册后再绑定 ECS，确保空间槽位有效。
         /// </summary>
         /// <param name="prefab">敌人源预制体，同时用于提取 ECS 渲染资源。</param>
+        /// <param name="spawnCategory">本次生成实例的分类。</param>
         /// <param name="position">敌人的世界坐标。</param>
         /// <param name="healthMultiplier">本局难度生命倍率。</param>
         /// <param name="speedMultiplier">本局难度速度倍率。</param>
+        /// <param name="initialRotation">本次生成使用的世界初始旋转。</param>
         /// <returns>已初始化的敌人；资源缺失或 ECS 绑定失败时返回 <c>null</c>。</returns>
         public Enemy CreateEnemy(
             GameObject prefab,
+            EnemySpawnCategory spawnCategory,
             Vector3 position,
-            float healthMultiplier, float speedMultiplier)
+            float healthMultiplier,
+            float speedMultiplier,
+            Quaternion initialRotation)
         {
             if (prefab == null)
             {
@@ -67,15 +72,14 @@ namespace EnemySystem.Spawning
             }
 
             enemy.SourcePrefab = prefab;
-            enemy.InitializeForSpawn(healthMultiplier, speedMultiplier);
+            enemy.InitializeForSpawn(healthMultiplier, speedMultiplier, spawnCategory);
             if (!enemy.HasConfiguration || enemy.MaxHealth <= 0f)
             {
                 _pool.ReturnEnemy(enemyInstance);
                 return null;
             }
 
-            Quaternion rotation = prefab.transform.rotation;
-            enemyInstance.transform.SetPositionAndRotation(position, rotation);
+            enemyInstance.transform.SetPositionAndRotation(position, initialRotation);
 
             EnemyFlockBridge bridge = enemyInstance.GetComponent<EnemyFlockBridge>();
             if (bridge == null)
@@ -91,7 +95,7 @@ namespace EnemySystem.Spawning
                     enemy.EnemyType,
                     enemy.GetMovementSpeedMultiplier(),
                     position,
-                    rotation))
+                    initialRotation))
             {
                 _pool.ReturnEnemy(enemyInstance);
                 return null;
@@ -100,14 +104,21 @@ namespace EnemySystem.Spawning
             return enemy;
         }
 
-        /// <summary>在对象池租借前验证生产敌人所需的根组件组合。</summary>
+        /// <summary>在对象池租借前验证敌人的核心和类型专属组件组合。</summary>
         /// <param name="prefab">待生成的敌人预制体。</param>
         /// <returns>组合完整时返回 true。</returns>
         private static bool ValidatePrefab(GameObject prefab)
         {
-            if (prefab.GetComponent<Enemy>() == null)
+            Enemy enemy = prefab.GetComponent<Enemy>();
+            if (enemy == null)
             {
                 Debug.LogError($"[EnemyFactory] {prefab.name}: 缺少 Enemy 组件。", prefab);
+                return false;
+            }
+
+            if (!enemy.HasConfiguration)
+            {
+                Debug.LogError($"[EnemyFactory] {prefab.name}: 缺少 EnemyAttributesSO 配置。", prefab);
                 return false;
             }
 
@@ -125,7 +136,38 @@ namespace EnemySystem.Spawning
                 return false;
             }
 
-            return true;
+            return ValidateMechanic(enemy);
+        }
+
+        /// <summary>验证敌人类型要求的机制组件。</summary>
+        /// <param name="enemy">待生成的敌人。</param>
+        /// <returns>必需机制组件存在时返回 true。</returns>
+        private static bool ValidateMechanic(Enemy enemy)
+        {
+            Type mechanicType = enemy.EnemyType switch
+            {
+                EnemyType.Fast => typeof(EnemyDodgeComponent),
+                EnemyType.Tank => typeof(EnemyShieldComponent),
+                EnemyType.Assault => typeof(EnemyAssaultComponent),
+                EnemyType.Growth => typeof(EnemyGrowthComponent),
+                EnemyType.Reflect => typeof(EnemyReflectComponent),
+                EnemyType.Exploder => typeof(EnemyDeathExplosionComponent),
+                EnemyType.Shooter => typeof(EnemyShooterComponent),
+                EnemyType.Slow or EnemyType.Healer or EnemyType.StrongHealer =>
+                    typeof(EnemyAreaEffectComponent),
+                EnemyType.Mother => typeof(EnemyMotherComponent),
+                _ => null
+            };
+
+            if (mechanicType == null || enemy.GetComponent(mechanicType) != null)
+            {
+                return true;
+            }
+
+            Debug.LogError(
+                $"[EnemyFactory] {enemy.name}: 缺少 {mechanicType.Name} 组件。",
+                enemy);
+            return false;
         }
 
         /// <summary>

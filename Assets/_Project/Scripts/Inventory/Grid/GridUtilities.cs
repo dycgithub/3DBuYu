@@ -99,7 +99,7 @@ public static class GridUtilities
     }
     public static class ShapeFactory
     {
-        /// <summary>按形状枚举解析点集(Step 2 迁入 ItemShapeSet 后此方法废弃)。</summary>
+        /// <summary>按形状枚举解析标准点集，供默认形状库和工具使用。</summary>
         public static List<Vector2Int> FromEnum(ItemShape shape) => shape switch
         {
             ItemShape.Vertical2 => Vertical2(),
@@ -112,6 +112,7 @@ public static class GridUtilities
             ItemShape.TShape2 => TShape2(),
             ItemShape.Plus3 => Plus3(),
             ItemShape.Plus5 => Plus5(),
+            ItemShape.StarCluster => StarCluster(),
             _ => Single(),
         };
 
@@ -143,6 +144,16 @@ public static class GridUtilities
             new Vector2Int(1, 2),
             new Vector2Int(3, 2),
             new Vector2Int(4, 2),
+        };
+
+        /// <summary>星群图案只占星号位置，五乘五包围盒中的八个空洞不占格。</summary>
+        public static List<Vector2Int> StarCluster() => new()
+        {
+            new(0, 0), new(2, 0), new(4, 0),
+            new(1, 1), new(2, 1), new(3, 1),
+            new(0, 2), new(1, 2), new(2, 2), new(3, 2), new(4, 2),
+            new(1, 3), new(2, 3), new(3, 3),
+            new(0, 4), new(2, 4), new(4, 4),
         };
     }
 }

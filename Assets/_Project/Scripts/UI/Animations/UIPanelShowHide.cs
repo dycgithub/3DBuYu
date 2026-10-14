@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using DG.Tweening;
 using UnityEngine;
@@ -7,9 +8,16 @@ namespace _Project.UI.Animations
     /// <summary>
     /// 场景面板的显隐动效。
     /// 面板主体、遮罩和错峰子项都必须由场景或预制体预先提供，脚本只改变已有对象的状态。
+    /// 面板显隐状态通过事件同步给需要响应状态的组件。
     /// </summary>
     public sealed class UIPanelShowHide : MonoBehaviour
     {
+        private enum TransitionRaycastMode
+        {
+            Release,
+            BlockUntilHidden
+        }
+
         public enum Mode
         {
             Scale,
@@ -31,6 +39,8 @@ namespace _Project.UI.Animations
         private CanvasGroup _group;
         [SerializeField, Tooltip("初始化时是否立即将面板设置为隐藏状态。")]
         private bool _startHidden = true;
+        [SerializeField, Tooltip("面板动画期间是否继续拦截底层 UI 的射线输入。")]
+        private TransitionRaycastMode _transitionRaycastMode;
 
         [Header("主体变换")]
         [SerializeField, Tooltip("是否启用主体的位移、缩放和显示/隐藏变换动画；关闭时改为立即切换状态。")]
@@ -76,6 +86,9 @@ namespace _Project.UI.Animations
         private bool _isVisible;
         private bool _initialized;
 
+        /// <summary>面板开始显示或完全隐藏时通知调用方。</summary>
+        public event Action<bool> VisibilityChanged;
+
         public bool IsVisible
         {
             get
@@ -99,12 +112,13 @@ namespace _Project.UI.Animations
             EnsureInitialized();
         }
 
+        /// <summary>停用组件时终止动画并立即归一到隐藏状态。</summary>
         private void OnDisable()
         {
             _activeTween?.Kill();
             _activeTween = null;
-            _isVisible = false;
-            SetInteraction(false);
+            SetInstantHidden();
+            VisibilityChanged?.Invoke(false);
         }
 
         private void ResolveReferences()
@@ -185,7 +199,8 @@ namespace _Project.UI.Animations
 
             _activeTween?.Kill();
             _isVisible = true;
-            SetInteraction(false);
+            VisibilityChanged?.Invoke(true);
+            SetTransitionInteraction();
             if (!_transformAnimation && !_fadeAnimation && !_animateChildren)
             {
                 SetInstantVisible();
@@ -206,10 +221,11 @@ namespace _Project.UI.Animations
                 return;
 
             _activeTween?.Kill();
-            SetInteraction(false);
+            SetTransitionInteraction();
             if (!_transformAnimation && !_fadeAnimation && !_animateChildren)
             {
                 SetInstantHidden();
+                VisibilityChanged?.Invoke(false);
                 return;
             }
 
@@ -220,6 +236,7 @@ namespace _Project.UI.Animations
             {
                 _isVisible = false;
                 SetInstantHidden();
+                VisibilityChanged?.Invoke(false);
             });
         }
 
@@ -430,6 +447,19 @@ namespace _Project.UI.Animations
                 _group.interactable = enabled;
                 _group.blocksRaycasts = enabled;
             }
+        }
+
+        /// <summary>按面板策略设置过渡期间的交互和底层射线拦截。</summary>
+        private void SetTransitionInteraction()
+        {
+            if (_group == null)
+            {
+                return;
+            }
+
+            _group.interactable = false;
+            _group.blocksRaycasts =
+                _transitionRaycastMode == TransitionRaycastMode.BlockUntilHidden;
         }
     }
 }

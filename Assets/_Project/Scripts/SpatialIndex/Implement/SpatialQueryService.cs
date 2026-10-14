@@ -233,7 +233,7 @@ namespace SpatialIndexing
         }
 
         /// <summary>中央模拟完成后一次发布子弹快照，不给每颗子弹创建组件。</summary>
-        public void PublishProjectiles(IReadOnlyList<ProjectileRuntime> projectiles)
+        public void PublishProjectiles(IReadOnlyList<ProjectileState> projectiles)
         {
             _projectiles.Configure(new float3(-100), 25f, new int3(8), projectiles.Count);
             _projectileHandles.Clear();
@@ -243,7 +243,7 @@ namespace SpatialIndexing
             }
             for (int slot = 0; slot < projectiles.Count; slot++)
             {
-                ProjectileRuntime projectile = projectiles[slot];
+                ProjectileState projectile = projectiles[slot];
                 _projectileHandles.Add(new ProjectileHandle(projectile));
                 _projectiles.Active[slot] = projectile.IsCompleted ? (byte)0 : (byte)1;
                 _projectiles.Positions[slot] = projectile.Position;
@@ -269,7 +269,7 @@ namespace SpatialIndexing
         /// <summary>读取一次有效租借的当前位置；回收或复用后返回 false。</summary>
         public bool TryGetPosition(ProjectileHandle handle, out Vector3 position)
         {
-            ProjectileRuntime projectile = handle.Resolve();
+            ProjectileState projectile = handle.Resolve();
             position = projectile != null ? projectile.Position : default;
             return projectile != null;
         }

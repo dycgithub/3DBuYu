@@ -2,6 +2,7 @@ using DG.Tweening;
 using CombatSystem;
 using EnemySystem;
 using UnityEngine;
+using _Project.Tests.CombatPlayground.Model;
 
 namespace _Project.Tests.CombatPlayground.Implement
 {
@@ -17,18 +18,14 @@ namespace _Project.Tests.CombatPlayground.Implement
         [SerializeField] private Transform targetVisual;
         [SerializeField] private Transform emitterVisual;
 
-        private Renderer[] _targetRenderers;
         private Renderer[] _emitterRenderers;
         private Vector3 _targetScale;
         private Vector3 _emitterScale;
         private Tween _targetPunch;
         private Tween _emitterPunch;
-        private readonly FlashState _targetFlash = new();
         private readonly FlashState _emitterFlash = new();
         private float _scalePunch = 0.35f;
         private float _punchDuration = 0.24f;
-        private float _flashDuration = 0.16f;
-        private Color _flashColor = new(1f, 0.38f, 0.16f, 1f);
 
         private sealed class FlashState
         {
@@ -65,19 +62,6 @@ namespace _Project.Tests.CombatPlayground.Implement
             StopAllJuice();
         }
 
-        /// <summary>更新会话内 Juice 参数。</summary>
-        public void SetTuning(
-            float scalePunch,
-            float punchDuration,
-            Color flashColor,
-            float flashDuration)
-        {
-            _scalePunch = Mathf.Clamp01(scalePunch);
-            _punchDuration = Mathf.Max(0.01f, punchDuration);
-            _flashColor = flashColor;
-            _flashDuration = Mathf.Max(0f, flashDuration);
-        }
-
         /// <summary>播放发射器蓄力表现。</summary>
         public void PlayCharge(float duration)
         {
@@ -91,24 +75,12 @@ namespace _Project.Tests.CombatPlayground.Implement
         }
 
         /// <summary>播放发射成功或失败后的发射器反馈。</summary>
-        public void PlayAfterFire(bool succeeded)
+        public void PlayAfterFire(CombatPlaygroundFireResult result)
         {
-            float intensity = succeeded ? _scalePunch : _scalePunch * 0.5f;
+            float intensity = result == CombatPlaygroundFireResult.Accepted
+                ? _scalePunch
+                : _scalePunch * 0.5f;
             PlayPunch(emitterVisual, ref _emitterPunch, intensity, _punchDuration);
-        }
-
-        /// <summary>手动播放一次当前敌人的命中 Juice。</summary>
-        public void PlayTargetHit()
-        {
-            PlayPunch(targetVisual, ref _targetPunch, _scalePunch, _punchDuration);
-            PlayFlash(_targetRenderers, _targetFlash, _flashColor, _flashDuration);
-        }
-
-        /// <summary>手动播放一次当前敌人的死亡 Juice。</summary>
-        public void PlayTargetDeath()
-        {
-            PlayFlash(_targetRenderers, _targetFlash, Color.yellow, _flashDuration);
-            PlayPunch(targetVisual, ref _targetPunch, _scalePunch * 1.25f, _punchDuration);
         }
 
         /// <summary>恢复实验场景中的两个视觉节点。</summary>
@@ -130,9 +102,6 @@ namespace _Project.Tests.CombatPlayground.Implement
                 emitterVisual = transform;
             }
 
-            _targetRenderers = targetVisual != null
-                ? targetVisual.GetComponentsInChildren<Renderer>(true)
-                : System.Array.Empty<Renderer>();
             _emitterRenderers = emitterVisual != null
                 ? emitterVisual.GetComponentsInChildren<Renderer>(true)
                 : System.Array.Empty<Renderer>();
@@ -294,15 +263,11 @@ namespace _Project.Tests.CombatPlayground.Implement
         {
             _targetPunch?.Kill();
             _emitterPunch?.Kill();
-            _targetFlash.Tween?.Kill();
             _emitterFlash.Tween?.Kill();
             _targetPunch = null;
             _emitterPunch = null;
-            RestorePropertyBlocks(_targetRenderers, _targetFlash.OriginalBlocks);
             RestorePropertyBlocks(_emitterRenderers, _emitterFlash.OriginalBlocks);
-            _targetFlash.Tween = null;
             _emitterFlash.Tween = null;
-            _targetFlash.OriginalBlocks = null;
             _emitterFlash.OriginalBlocks = null;
             RestoreScale(targetVisual);
             RestoreScale(emitterVisual);

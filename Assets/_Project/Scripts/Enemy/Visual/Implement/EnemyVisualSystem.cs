@@ -13,8 +13,8 @@ using VContainer.Unity;
 namespace EnemySystem.Visual
 {
     /// <summary>
-    /// 集中管理敌人 ECS 实例的受击、低血量和死亡视觉状态。
-    /// <para>敌人组件只负责生命周期绑定，本系统负责状态推进和特效派发。</para>
+    /// 集中管理敌人 ECS 实例的受击、死亡溶解和冻结状态。
+    /// <para>池化重置恢复群游，死亡期间由 ECS 保持最终姿态不动。</para>
     /// </summary>
     public sealed class EnemyVisualSystem : ITickable, IDisposable
     {
@@ -135,7 +135,7 @@ namespace EnemySystem.Visual
             entry.State.DeathProgress = 0f;
             entry.State.CrackSeed = CreateSeed(enemy);
             entry.IsDirty = true;
-            entry.Bridge.SetExternalMotion(false);
+            entry.Bridge.SetMotionMode(EnemyFlockMotionMode.Flocking);
         }
 
         /// <summary>开始一个敌人的死亡视觉流程，但不释放 ECS 实体。</summary>
@@ -152,7 +152,7 @@ namespace EnemySystem.Visual
             entry.Enemy.SetDamagePresentationState(
                 entry.Presentation.DeathHighlightColor,
                 entry.DeathDuration);
-            entry.Bridge.SetExternalMotion(true);
+            entry.Bridge.SetMotionMode(EnemyFlockMotionMode.Frozen);
 
             if (enemy.Attributes != null)
             {

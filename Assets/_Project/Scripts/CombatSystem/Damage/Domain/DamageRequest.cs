@@ -4,13 +4,25 @@ using UnityEngine.Serialization;
 namespace CombatSystem
 {
     /// <summary>
-    /// 描述一次尚未交给目标处理的伤害请求。
+    /// 描述一次待处理伤害及发起该命中的攻击返能数据。
     /// </summary>
     public struct DamageRequest
     {
         /// <summary>产生这次伤害的攻击运行时标识。</summary>
         [FormerlySerializedAs("AttackId")]
         public int AttackInstanceId;
+
+        /// <summary>该攻击支付的基础能量成本，尚未应用全局消耗倍率。</summary>
+        public float EnergyCost;
+
+        /// <summary>攻击发射时记录的实付能量成本。</summary>
+        public float PaidEnergyCostSnapshot;
+
+        /// <summary>指示实付能量成本快照已明确设置，包括零成本。</summary>
+        public bool HasPaidEnergyCostSnapshot;
+
+        /// <summary>该攻击击杀目标时返还能量的配置比例。</summary>
+        public float KillEnergyRefundRatio;
 
         /// <summary>产生这次伤害的来源运行时标识。</summary>
         [FormerlySerializedAs("SourceId")]

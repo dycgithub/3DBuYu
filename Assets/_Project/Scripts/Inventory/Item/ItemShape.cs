@@ -19,6 +19,7 @@ public enum ItemShape
     TShape2,        // T 形
     Plus3,          // 3×3 十字
     Plus5,          // 5×5 十字
+    StarCluster,    // 5×5 星群，十七格，空洞允许嵌入物品
 
 }
 

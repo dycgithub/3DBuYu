@@ -2,6 +2,8 @@ using System;
 using Services;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Localization;
+using UnityEngine.Localization.Settings;
 
 namespace _Project.UI.Common
 {
@@ -16,7 +18,7 @@ namespace _Project.UI.Common
     }
 
     /// <summary>
-    /// 管理当前场景的 Tooltip 生命周期、内容刷新和独立开关。
+    /// 管理当前场景的 Tooltip、语言刷新和独立开关；面板按物品所属 Canvas 延迟查找。
     /// UIScene 和 GameScene 各自注册一个实例，避免跨场景持有已经销毁的 UI 引用。
     /// </summary>
     public sealed class ItemTooltipManager : IItemTooltipService, IDisposable
@@ -53,7 +55,7 @@ namespace _Project.UI.Common
             _hoverEnabled = hoverEnabled;
             _selectedEnabled = selectedEnabled;
             _selection.SelectionChanged += OnSelectionChanged;
-            HideExistingFixedPanel();
+            LocalizationSettings.SelectedLocaleChanged += RefreshLanguage;
         }
 
         /// <inheritdoc />
@@ -156,6 +158,7 @@ namespace _Project.UI.Common
         /// <summary>释放事件订阅并隐藏场景内 Tooltip。</summary>
         public void Dispose()
         {
+            LocalizationSettings.SelectedLocaleChanged -= RefreshLanguage;
             _selection.SelectionChanged -= OnSelectionChanged;
             HideTooltip(_selectedTooltip);
             HideTooltip(_hoverTooltip);
@@ -172,21 +175,14 @@ namespace _Project.UI.Common
             RefreshSelectedTooltip();
         }
 
-        private void HideExistingFixedPanel()
+        /// <summary>切换语言时重建已显示的内容，不改变选中状态或拖拽状态。</summary>
+        private void RefreshLanguage(Locale _)
         {
-            if (_mode != ItemTooltipMode.Fixed)
-                return;
-
-            GameObject panel = GameObject.Find("ItemInfoPanel");
-            if (panel == null)
-                return;
-
-            _selectedTooltip = panel.GetComponent<ItemTooltip>();
-            if (_selectedTooltip == null)
-                return;
-
-            _selectedTooltip.Initialize(true);
-            _selectedTooltip.Hide();
+            RefreshSelectedTooltip();
+            if (_hoverItem != null && _hoverTooltip != null && _hoverTooltip.IsVisible)
+            {
+                _hoverTooltip.Show(BuildContent(_hoverItem));
+            }
         }
 
         private ItemTooltip EnsureSelectedTooltip(ItemView source)

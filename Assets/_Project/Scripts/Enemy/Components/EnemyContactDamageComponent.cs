@@ -9,8 +9,8 @@ using VContainer;
 namespace EnemySystem.Components
 {
     /// <summary>
-    /// 敌人与玩家发生 Trigger 接触时造成能量伤害。
-    /// <para>组件仅在挂载到敌人时生效，冷却状态随启用、禁用和对象池生命周期清理。</para>
+    /// 敌人与玩家发生 Trigger 接触时造成能量伤害，并通知可选的接触死亡行为。
+    /// <para>冷却状态随启用、禁用和对象池生命周期清理。</para>
     /// </summary>
     [ExecuteAlways]
     [DisallowMultipleComponent]
@@ -31,17 +31,20 @@ namespace EnemySystem.Components
 
         private readonly Dictionary<int, float> _lastContactTimes = new();
         private Enemy _enemy;
+        private EnemyContactDeathComponent _contactDeath;
 
         /// <summary>缓存所属敌人。</summary>
         private void Awake()
         {
             _enemy = GetComponent<Enemy>();
+            _contactDeath = GetComponent<EnemyContactDeathComponent>();
         }
 
         /// <summary>启用时清理上一次租借留下的接触冷却。</summary>
         private void OnEnable()
         {
             _enemy ??= GetComponent<Enemy>();
+            _contactDeath ??= GetComponent<EnemyContactDeathComponent>();
             ClearContactState();
         }
 
@@ -100,37 +103,33 @@ namespace EnemySystem.Components
             }
 
             _lastContactTimes[playerId] = Time.time;
-            if (_enemy.GetAttackAllowedMultiplier() <= 0f)
-            {
-                return;
-            }
-
             float damage = Mathf.Max(0f, damagePerContact) * _enemy.GetAttackDamageMultiplier();
-            if (damage <= 0f)
+            if (_enemy.GetAttackAllowedMultiplier() > 0f && damage > 0f)
             {
-                return;
-            }
-            if (_playerTarget != null)
-            {
-                if (_damageProcessor != null)
+                if (_playerTarget != null)
                 {
-                    _damageProcessor.TryApplyDamage(
-                        _playerTarget,
-                        new DamageRequest
-                        {
-                            SourceInstanceId = _enemy.GetInstanceID(),
-                            DamageAmount = damage,
-                            DamageType = DamageType.Physical,
-                            HitPosition = other.ClosestPoint(transform.position),
-                            HitNormal = Vector3.up
-                        },
-                        out _);
+                    if (_damageProcessor != null)
+                    {
+                        _damageProcessor.TryApplyDamage(
+                            _playerTarget,
+                            new DamageRequest
+                            {
+                                SourceInstanceId = _enemy.GetInstanceID(),
+                                DamageAmount = damage,
+                                DamageType = DamageType.Physical,
+                                HitPosition = other.ClosestPoint(transform.position),
+                                HitNormal = Vector3.up
+                            },
+                            out _);
+                    }
                 }
-
-                return;
+                else
+                {
+                    _energyService.Drain(damage, EnergySpendKind.EnemyContact);
+                }
             }
 
-            _energyService.Drain(damage, EnergySpendKind.EnemyContact);
+            _contactDeath?.TryKillOnPlayerContact();
         }
 
         /// <summary>只接受现有 Player 标签，避免敌人之间互相触发。</summary>

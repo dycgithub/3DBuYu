@@ -87,7 +87,7 @@ namespace _Project.UI.MetaballMenu
 
                 item.InitializeRuntime();
                 MetaballFusionProgress progress = item.Progress;
-                bool isHeld = _input != null && item.HoldKey != KeyCode.None && _input.IsKeyHeld(item.HoldKey);
+                bool isHeld = _input != null && _input.IsMenuActionHeld(item.MenuAction);
                 bool paymentSucceeded = false;
 
                 if (canFuse && isHeld && !progress.IsComplete && !progress.RequiresRelease)
@@ -174,17 +174,17 @@ namespace _Project.UI.MetaballMenu
             if (_items == null)
                 return;
 
-            var keys = new HashSet<KeyCode>();
+            var actions = new HashSet<MenuInputAction>();
             for (int i = 0; i < _items.Count; i++)
             {
                 MetaballMenuItem item = _items[i];
                 if (item == null)
                     continue;
 
-                if (item.HoldKey == KeyCode.None)
-                    Debug.LogWarning($"[MetaballMenuController] 子 UI 未配置按键: {item.name}", item);
-                else if (!keys.Add(item.HoldKey))
-                    Debug.LogWarning($"[MetaballMenuController] 子 UI 使用了重复按键: {item.HoldKey}", item);
+                if (!actions.Add(item.MenuAction))
+                    Debug.LogWarning(
+                        $"[MetaballMenuController] 子 UI 使用了重复菜单动作: {item.MenuAction}",
+                        item);
             }
 
             if (_items.Count + 1 > MetaballFieldGraphic.MaxBallCount)

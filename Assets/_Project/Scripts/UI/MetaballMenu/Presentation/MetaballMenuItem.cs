@@ -1,17 +1,20 @@
+using Services;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Localization;
+using UnityEngine.Localization.Settings;
 
 namespace _Project.UI.MetaballMenu
 {
     /// <summary>
-    /// 一个融球入口的配置和局部表现。
+    /// 一个融球入口的配置和当前语言局部表现。
     /// 能量扣除、进度推进和面板打开由 MetaballMenuController 统一管理。
     /// </summary>
     public sealed class MetaballMenuItem : MonoBehaviour
     {
         [Header("入口")]
         [SerializeField] private string _title = "入口";
-        [SerializeField] private KeyCode _holdKey = KeyCode.F1;
+        [SerializeField] private MenuInputAction _menuAction = MenuInputAction.Settings;
         [SerializeField] private MetaballMenuTarget _target;
 
         [Header("融球参数")]
@@ -30,8 +33,9 @@ namespace _Project.UI.MetaballMenu
 
         private MetaballFusionProgress _progress;
 
-        public string Title => string.IsNullOrWhiteSpace(_title) ? _target.ToString() : _title;
-        public KeyCode HoldKey => _holdKey;
+        public string Title => L10n.GetOrDefault($"menu.{_target}.title",
+            string.IsNullOrWhiteSpace(_title) ? _target.ToString() : _title);
+        public MenuInputAction MenuAction => _menuAction;
         public MetaballMenuTarget Target => _target;
         public float OrbitAngle => _orbitAngle;
         public float OrbitRadius => _orbitRadius;
@@ -55,6 +59,19 @@ namespace _Project.UI.MetaballMenu
             ResolveViewReferences();
             InitializeRuntime();
             RefreshStaticView();
+            LocalizationSettings.SelectedLocaleChanged += RefreshLanguage;
+        }
+
+        /// <summary>语言变化仅刷新入口文字，保留融球进度。</summary>
+        private void RefreshLanguage(Locale _)
+        {
+            RefreshStaticView();
+        }
+
+        /// <summary>释放跨场景语言事件。</summary>
+        private void OnDestroy()
+        {
+            LocalizationSettings.SelectedLocaleChanged -= RefreshLanguage;
         }
 
         /// <summary>创建与当前 Inspector 配置对应的运行时进度。</summary>
@@ -102,7 +119,7 @@ namespace _Project.UI.MetaballMenu
             if (_titleLabel != null)
                 _titleLabel.text = Title;
             if (_keyLabel != null)
-                _keyLabel.text = FormatKey(_holdKey);
+                _keyLabel.text = FormatMenuAction(_menuAction);
         }
 
         private TMP_Text FindText(string childName)
@@ -111,24 +128,15 @@ namespace _Project.UI.MetaballMenu
             return child != null ? child.GetComponent<TMP_Text>() : null;
         }
 
-        private static string FormatKey(KeyCode key)
+        private static string FormatMenuAction(MenuInputAction action)
         {
-            if (key == KeyCode.None)
+            return action switch
             {
-                return "-";
-            }
-
-            if (key >= KeyCode.Alpha0 && key <= KeyCode.Alpha9)
-            {
-                return ((int)key - (int)KeyCode.Alpha0).ToString();
-            }
-
-            if (key >= KeyCode.Keypad0 && key <= KeyCode.Keypad9)
-            {
-                return $"Num{(int)key - (int)KeyCode.Keypad0}";
-            }
-
-            return key.ToString();
+                MenuInputAction.Settings => "F1",
+                MenuInputAction.Supply => "F2",
+                MenuInputAction.Backpack => "F3",
+                _ => "-"
+            };
         }
     }
 }

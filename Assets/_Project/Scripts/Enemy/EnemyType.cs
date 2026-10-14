@@ -6,17 +6,22 @@ namespace EnemySystem
     /// </summary>
     public enum EnemyType
     {
+        // 普通敌人
         Normal = 0,
         Fast = 1,
         Tank = 2,
-        Assault = 3,
-        Growth = 4,
         Reflect = 5,
         Exploder = 6,
-        Shooter = 7,
+
+        // 精英敌人
         Slow = 8,
         Healer = 9,
         StrongHealer = 10,
+
+        // Boss：Assault、Shooter 使用行为树；Growth、Mother 使用 GOAP。
+        Assault = 3,
+        Shooter = 7,
+        Growth = 4,
         Mother = 11
     }
 }

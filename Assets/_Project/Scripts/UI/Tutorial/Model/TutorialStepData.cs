@@ -3,11 +3,13 @@ using UnityEngine;
 
 namespace _Project.UI.Tutorial.Model
 {
-    /// <summary>保存一个教程步骤的文字、目标和完成规则。</summary>
+    /// <summary>保存教程步骤的翻译键、原始文字、目标和完成规则。</summary>
     [Serializable]
     public sealed class TutorialStepData
     {
         [SerializeField] private string _title;
+        [SerializeField] private string _titleKey;
+        [SerializeField] private string _descriptionKey;
         [SerializeField, TextArea(2, 6)] private string _description;
         [SerializeField] private string _targetId;
         [SerializeField] private TutorialFocusMode _focusMode = TutorialFocusMode.FullScreen;
@@ -36,8 +38,10 @@ namespace _Project.UI.Tutorial.Model
                 : TutorialFocusMode.Target;
         }
 
-        public string Title => _title;
-        public string Description => _description;
+        /// <summary>当前语言的步骤标题；临时测试步骤使用原始文字。</summary>
+        public string Title => L10n.GetOrDefault(_titleKey, _title);
+        /// <summary>当前语言的说明，翻译不影响步骤推进规则。</summary>
+        public string Description => L10n.GetOrDefault(_descriptionKey, _description);
         public string TargetId => _targetId;
         public TutorialFocusMode FocusMode => _focusMode;
         public TutorialAdvanceMode AdvanceMode => _advanceMode;

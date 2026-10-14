@@ -14,21 +14,25 @@ using _Project.Tests.CombatPlayground.View;
 namespace _Project.Tests.CombatPlayground.Implement
 {
     /// <summary>
-    /// 编排 CombatPlayground 的目标选择、攻击、技能、Buff 和运行时调参。
+    /// 编排 CombatPlayground 的目标选择、攻击、技能、Buff 与会话内弹道调参。
     /// </summary>
     public sealed class CombatPlaygroundController : MonoBehaviour
     {
         private const int PortIndex = 0;
         private const float RaycastDistance = 200f;
+        private const string EnemyLayerName = "Enemy";
 
         [Header("场景对象")]
         [SerializeField] private Camera sceneCamera;
         [SerializeField] private Enemy target;
+        [SerializeField] private CombatPlaygroundTargetSet targetSet;
+        [SerializeField] private CombatPlaygroundSkillRunner skillRunner;
+        [SerializeField] private CombatPlaygroundEffectPreview effectPreview;
+        [SerializeField] private CombatPlaygroundEnemyAttributes enemyAttributes;
         [SerializeField] private Transform firePoint;
         [SerializeField] private Play.TransmitterSO transmitter;
         [SerializeField] private ProjectileProfileSO defaultProjectile;
         [SerializeField] private ProjectileProfileSO[] projectileProfiles;
-        [SerializeField] private SkillDefinitionSO[] skills;
         [SerializeField] private BuffDefinitionSO buffDefinition;
         [SerializeField] private CombatPlaygroundJuice juice;
 
@@ -36,18 +40,20 @@ namespace _Project.Tests.CombatPlayground.Implement
         [SerializeField] private CombatPlaygroundTuning tuning = new();
 
         [Inject] private ITransmitterAttackService _attackService;
-        [Inject] private ISkillExecutionService _skillService;
         [Inject] private IBuffService _buffService;
         [Inject] private IEnergyService _energyService;
         [Inject] private ITransmitterGlobalEffectService _globalEffects;
+        [Inject] private ICentralSkillEffectResetService _skillEffectReset;
         [Inject] private IProjectileHitEventSource _projectileEvents;
 
         private CombatPlaygroundView _view;
         private ProjectileProfileSO _activeProjectile;
-        private int _projectileIndex;
+        private readonly List<ProjectileProfileSO> _projectileCopies = new();
         private int _shotCount;
         private bool _autoFire;
         private bool _hasSelectedTarget;
+        private CombatPlaygroundSkillExecutionMode _skillExecutionMode =
+            CombatPlaygroundSkillExecutionMode.FormalRelease;
         private float _nextShotTime;
         private int _buffSourceId;
         private string _status = "等待点击敌人";
@@ -58,9 +64,11 @@ namespace _Project.Tests.CombatPlayground.Implement
         {
             _buffSourceId = GetInstanceID();
             _energyService?.Initialize(100f, 100f);
-            SelectProjectile(0, false);
-            _projectileEvents.HitProcessed += OnProjectileHit;
-            ApplyJuiceTuning();
+            SelectProjectile(0, CombatPlaygroundStatusUpdateMode.Silent);
+            if (_projectileEvents != null)
+            {
+                _projectileEvents.HitProcessed += OnProjectileHit;
+            }
             RefreshView();
         }
 
@@ -94,10 +102,15 @@ namespace _Project.Tests.CombatPlayground.Implement
                 _projectileEvents.HitProcessed -= OnProjectileHit;
             }
 
-            if (_activeProjectile != null)
+            for (int index = 0; index < _projectileCopies.Count; index++)
             {
-                Destroy(_activeProjectile);
+                if (_projectileCopies[index] != null)
+                {
+                    Destroy(_projectileCopies[index]);
+                }
             }
+
+            _projectileCopies.Clear();
         }
 
         /// <summary>接收 UI Toolkit 视图。</summary>
@@ -123,25 +136,32 @@ namespace _Project.Tests.CombatPlayground.Implement
             }
 
             Ray ray = sceneCamera.ScreenPointToRay(screenPosition);
-            if (!Physics.Raycast(ray, out RaycastHit hit, RaycastDistance))
+            int enemyLayer = LayerMask.NameToLayer(EnemyLayerName);
+            if (enemyLayer < 0 || !Physics.Raycast(
+                    ray,
+                    out RaycastHit hit,
+                    RaycastDistance,
+                    1 << enemyLayer,
+                    QueryTriggerInteraction.Ignore))
             {
                 return;
             }
 
             Enemy clickedEnemy = hit.collider.GetComponentInParent<Enemy>();
-            if (clickedEnemy == target)
+            if (targetSet != null && targetSet.Contains(clickedEnemy))
             {
+                target = clickedEnemy;
                 _hasSelectedTarget = true;
-                SetStatus("已选中敌人");
+                SetStatus($"已选中：{target.name}");
             }
         }
 
         /// <summary>切换自动发射状态。</summary>
-        internal void SetAutoFire(bool enabled)
+        internal void SetAutoFire(CombatPlaygroundAutoFireState state)
         {
-            _autoFire = enabled;
+            _autoFire = state == CombatPlaygroundAutoFireState.Enabled;
             _nextShotTime = 0f;
-            SetStatus(enabled ? "自动发射已开启" : "自动发射已关闭");
+            SetStatus(_autoFire ? "自动发射已开启" : "自动发射已关闭");
         }
 
         /// <summary>尝试向当前选中的敌人发射一次。</summary>
@@ -187,7 +207,9 @@ namespace _Project.Tests.CombatPlayground.Implement
                 transmitter.fireSound,
                 transmitter.fireEffectId);
             bool succeeded = _attackService.TryExecuteAttack(in input);
-            juice?.PlayAfterFire(succeeded);
+            juice?.PlayAfterFire(succeeded
+                ? CombatPlaygroundFireResult.Accepted
+                : CombatPlaygroundFireResult.Rejected);
             if (succeeded)
             {
                 _shotCount++;
@@ -204,11 +226,11 @@ namespace _Project.Tests.CombatPlayground.Implement
         /// <summary>切换当前会话使用的投射物配置。</summary>
         internal void SelectProjectile(int index)
         {
-            SelectProjectile(index, true);
+            SelectProjectile(index, CombatPlaygroundStatusUpdateMode.Report);
         }
 
-        /// <summary>切换投射物并控制是否刷新操作状态。</summary>
-        private void SelectProjectile(int index, bool updateStatus)
+        /// <summary>切换投射物并按指定模式更新状态提示。</summary>
+        private void SelectProjectile(int index, CombatPlaygroundStatusUpdateMode updateMode)
         {
             ProjectileProfileSO source = index >= 0 && projectileProfiles != null &&
                 index < projectileProfiles.Length
@@ -220,14 +242,9 @@ namespace _Project.Tests.CombatPlayground.Implement
             }
 
             ProjectileProfileSO next = CloneProjectile(source);
-            if (_activeProjectile != null)
-            {
-                Destroy(_activeProjectile);
-            }
-
             _activeProjectile = next;
-            _projectileIndex = Mathf.Max(0, index);
-            if (updateStatus)
+            _projectileCopies.Add(next);
+            if (updateMode == CombatPlaygroundStatusUpdateMode.Report)
             {
                 SetStatus($"已选择子弹：{source.name}");
             }
@@ -237,32 +254,38 @@ namespace _Project.Tests.CombatPlayground.Implement
             }
         }
 
-        /// <summary>执行选中的技能卡并把当前敌人作为显式目标。</summary>
+        /// <summary>执行选中的技能，并根据模式选择正式释放或动作直测。</summary>
         internal void ExecuteSkill(int index)
         {
-            if (index == 0)
-            {
-                SetStatus("技能不可用：场景只有一个发射器");
-                return;
-            }
+            IReadOnlyList<IDamageable> targets = targetSet.GetLivingTargets();
+            Vector3 sourcePosition = firePoint.position;
+            SetStatus(skillRunner.Execute(index, sourcePosition, targets, _skillExecutionMode));
+        }
 
-            if (_skillService == null || target == null || target.IsDead ||
-                skills == null || index < 0 || index >= skills.Length || skills[index] == null)
-            {
-                SetStatus("技能失败：技能或目标不可用");
-                return;
-            }
+        /// <summary>设置正式技能释放或动作直测模式。</summary>
+        internal void SetSkillExecutionMode(CombatPlaygroundSkillExecutionMode mode)
+        {
+            _skillExecutionMode = mode;
+            SetStatus(mode == CombatPlaygroundSkillExecutionMode.FormalRelease
+                ? "技能模式：正式释放（含能量、冷却与次数）"
+                : "技能模式：动作直测（绕过玩家释放规则）");
+        }
 
-            IReadOnlyList<IDamageable> targets = new IDamageable[] { target };
-            SkillExecutionRequest request = new(
-                skills[index],
-                GetInstanceID(),
-                firePoint != null ? firePoint.position : transform.position,
-                targets);
-            SkillExecutionResult result = _skillService.Execute(in request);
-            SetStatus(result.Succeeded
-                ? $"技能已执行：{skills[index].SkillIdentifier}"
-                : $"技能失败：{result.FailureReason}");
+        /// <summary>播放战斗特效目录中的独立预览项。</summary>
+        internal void PlayEffectPreview(int index)
+        {
+            Transform parent = target != null ? target.transform : null;
+            Vector3 position = parent != null
+                ? parent.position
+                : firePoint.position;
+            SetStatus(effectPreview.Play(index, position, parent));
+        }
+
+        /// <summary>切换偏轴目标移动，观察追踪投射物转向。</summary>
+        internal void ToggleTargetMotion()
+        {
+            targetSet.ToggleMotion();
+            SetStatus("已切换追踪目标移动状态");
         }
 
         /// <summary>向当前敌人施加场景配置的 Buff。</summary>
@@ -290,169 +313,125 @@ namespace _Project.Tests.CombatPlayground.Implement
             SetStatus("已移除实验场景 Buff");
         }
 
-        /// <summary>重置唯一敌人的生命、Buff、速度和表现状态。</summary>
+        /// <summary>重置全部敌人、临时属性、技能和场景全局效果。</summary>
         internal void ResetTarget()
         {
             _autoFire = false;
             _hasSelectedTarget = true;
-            target?.ResetForReuse();
-            target?.InitializeForSpawn(1f, 1f);
+            enemyAttributes.ResetAll();
+            targetSet.ResetAll();
+            target = targetSet.PrimaryTarget;
+
+            _skillEffectReset.ClearPermanentEffects();
+            skillRunner.ResetSkillState();
+            _energyService.Initialize(100f, 100f);
             juice?.ResetVisuals();
-            SetStatus("敌人已重置");
+            SetStatus("全部目标、Buff、技能资源与全局效果已重置");
         }
 
-        /// <summary>播放一个手动选择的 Juice 阶段。</summary>
-        internal void PlayStage(CombatPlaygroundStage stage)
+        /// <summary>更新指定的会话内发射器或投射物参数。</summary>
+        internal void SetAttackTuning(CombatPlaygroundAttackParameter parameter, float value)
         {
-            switch (stage)
+            switch (parameter)
             {
-                case CombatPlaygroundStage.Charge:
-                    juice?.PlayCharge(tuning.ChargeDuration);
+                case CombatPlaygroundAttackParameter.BaseDamage:
+                    tuning.SetBaseDamage(value);
                     break;
-                case CombatPlaygroundStage.BeforeFire:
-                    juice?.PlayBeforeFire();
+                case CombatPlaygroundAttackParameter.AttackRate:
+                    tuning.SetAttacksPerSecond(value);
                     break;
-                case CombatPlaygroundStage.AfterFire:
-                    juice?.PlayAfterFire(true);
+                case CombatPlaygroundAttackParameter.Range:
+                    tuning.SetBaseRange(value);
                     break;
-                case CombatPlaygroundStage.Hit:
-                    juice?.PlayTargetHit();
+                case CombatPlaygroundAttackParameter.ProjectileCount:
+                    tuning.SetProjectileCount(value);
                     break;
-                case CombatPlaygroundStage.Expired:
-                    juice?.PlayTargetDeath();
+                case CombatPlaygroundAttackParameter.Penetration:
+                    tuning.SetPenetration(value);
+                    break;
+                case CombatPlaygroundAttackParameter.ProjectileSpeed:
+                    if (_activeProjectile != null)
+                    {
+                        _activeProjectile.SpeedUnitsPerSecond = Mathf.Max(0f, value);
+                    }
+                    break;
+                case CombatPlaygroundAttackParameter.CollisionRadius:
+                    if (_activeProjectile != null)
+                    {
+                        _activeProjectile.CollisionRadius = Mathf.Max(0f, value);
+                    }
                     break;
             }
 
-            SetStatus($"已播放阶段：{stage}");
-        }
-
-        /// <summary>更新攻击调参并同步 Juice 参数。</summary>
-        internal void SetBaseDamage(float value)
-        {
-            tuning.SetBaseDamage(value);
             RefreshView();
         }
 
-        /// <summary>更新攻击频率。</summary>
-        internal void SetAttacksPerSecond(float value)
+        /// <summary>更新选中敌人的一个临时属性参数。</summary>
+        internal void SetEnemyAttribute(CombatPlaygroundEnemyAttribute attribute, float value)
         {
-            tuning.SetAttacksPerSecond(value);
+            switch (attribute)
+            {
+                case CombatPlaygroundEnemyAttribute.HealthMultiplier:
+                    enemyAttributes?.SetHealthMultiplier(value);
+                    break;
+                case CombatPlaygroundEnemyAttribute.MovementMultiplier:
+                    enemyAttributes?.SetMovementMultiplier(value);
+                    break;
+                case CombatPlaygroundEnemyAttribute.DamageTakenMultiplier:
+                    enemyAttributes?.SetDamageTakenMultiplier(value);
+                    break;
+                case CombatPlaygroundEnemyAttribute.AttackDamageMultiplier:
+                    enemyAttributes?.SetAttackDamageMultiplier(value);
+                    break;
+                case CombatPlaygroundEnemyAttribute.AttackAvailabilityMultiplier:
+                    enemyAttributes?.SetAttackAllowedMultiplier(value);
+                    break;
+                case CombatPlaygroundEnemyAttribute.BuffDuration:
+                    enemyAttributes?.SetBuffDuration(value);
+                    break;
+            }
+
             RefreshView();
         }
 
-        /// <summary>更新攻击射程。</summary>
-        internal void SetBaseRange(float value)
+        /// <summary>将面板中的会话属性应用到当前选中敌人。</summary>
+        internal void ApplyEnemyAttributes()
         {
-            tuning.SetBaseRange(value);
-            RefreshView();
-        }
+            if (enemyAttributes == null || target == null)
+            {
+                SetStatus("应用属性失败：请先选中场景敌人");
+                return;
+            }
 
-        /// <summary>更新一次攻击的投射物数量。</summary>
-        internal void SetProjectileCount(float value)
-        {
-            tuning.SetProjectileCount(value);
-            RefreshView();
-        }
+            bool applied = enemyAttributes.Apply(target, _buffService);
+            bool behaviorReady = targetSet == null || targetSet.RefreshBehaviorAgent(target);
 
-        /// <summary>更新一次攻击的穿透次数。</summary>
-        internal void SetPenetration(float value)
-        {
-            tuning.SetPenetration(value);
-            RefreshView();
-        }
-
-        /// <summary>更新蓄力阶段时长。</summary>
-        internal void SetChargeDuration(float value)
-        {
-            tuning.SetChargeDuration(value);
-            RefreshView();
-        }
-
-        /// <summary>更新缩放脉冲强度。</summary>
-        internal void SetScalePunch(float value)
-        {
-            tuning.SetScalePunch(value);
-            ApplyJuiceTuning();
-            RefreshView();
-        }
-
-        /// <summary>更新缩放脉冲时长。</summary>
-        internal void SetPunchDuration(float value)
-        {
-            tuning.SetPunchDuration(value);
-            ApplyJuiceTuning();
-            RefreshView();
-        }
-
-        /// <summary>更新命中闪烁时长。</summary>
-        internal void SetFlashDuration(float value)
-        {
-            tuning.SetFlashDuration(value);
-            ApplyJuiceTuning();
-            RefreshView();
-        }
-
-        /// <summary>更新命中闪烁颜色。</summary>
-        internal void SetFlashColor(Color value)
-        {
-            tuning.SetFlashColor(value);
-            ApplyJuiceTuning();
-            RefreshView();
-        }
-
-        /// <summary>播放手动目标 Juice。</summary>
-        internal void PlayTargetJuice()
-        {
-            juice?.PlayTargetHit();
-            SetStatus("已播放敌人命中 Juice");
+            SetStatus(!applied
+                ? "应用属性失败：Buff 服务不可用"
+                : behaviorReady
+                    ? $"已应用临时属性：{target.name}"
+                    : $"已应用临时属性：{target.name}；Shooter ECS Agent 未启动");
         }
 
         /// <summary>接收真实投射物命中事件并记录结果。</summary>
         private void OnProjectileHit(ProjectileHitContext context)
         {
-            if (!ReferenceEquals(context.Target, target))
+            if (context.Target is not Enemy hitEnemy ||
+                (targetSet != null && !targetSet.Contains(hitEnemy)))
             {
                 return;
             }
 
             SetStatus(context.DamageResult.WasApplied
-                ? $"投射物命中：伤害 {context.DamageResult.AppliedDamage:0.##}"
-                : "投射物命中但伤害未生效");
+                ? $"投射物命中 {hitEnemy.name}：伤害 {context.DamageResult.AppliedDamage:0.##}"
+                : $"投射物命中 {hitEnemy.name}，但伤害未生效");
         }
 
-        /// <summary>应用当前会话的 Juice 参数。</summary>
-        private void ApplyJuiceTuning()
-        {
-            juice?.SetTuning(
-                tuning.ScalePunch,
-                tuning.PunchDuration,
-                tuning.FlashColor,
-                tuning.FlashDuration);
-        }
-
-        /// <summary>创建不写回资产的投射物配置副本。</summary>
+        /// <summary>克隆完整投射物配置，避免遗漏高级弹道字段或写回共享资产。</summary>
         private static ProjectileProfileSO CloneProjectile(ProjectileProfileSO source)
         {
-            ProjectileProfileSO clone = ProjectileProfileSO.CreateRuntimeProfile(
-                $"CombatPlayground_{source.name}");
-            clone.EnergyCost = source.EnergyCost;
-            clone.SpeedUnitsPerSecond = source.SpeedUnitsPerSecond;
-            clone.MaximumTravelDistance = source.MaximumTravelDistance;
-            clone.CollisionRadius = source.CollisionRadius;
-            clone.DamageType = source.DamageType;
-            clone.TrajectoryDefinition = source.TrajectoryDefinition;
-            clone.VisualDefinition = source.VisualDefinition;
-            clone.HitEffectId = source.HitEffectId;
-            clone.ExpiredEffectId = source.ExpiredEffectId;
-            clone.OnHitEffectDefinitions = source.OnHitEffectDefinitions != null
-                ? new List<ProjectileEffectDefinitionSO>(source.OnHitEffectDefinitions)
-                : null;
-            clone.OnExpiredEffectDefinitions = source.OnExpiredEffectDefinitions != null
-                ? new List<ProjectileEffectDefinitionSO>(source.OnExpiredEffectDefinitions)
-                : null;
-            clone.BeforeHitEffectDefinitions = source.BeforeHitEffectDefinitions != null
-                ? new List<ProjectileEffectDefinitionSO>(source.BeforeHitEffectDefinitions)
-                : null;
+            ProjectileProfileSO clone = Instantiate(source);
+            clone.name = $"CombatPlayground_{source.name}";
             return clone;
         }
 
@@ -479,18 +458,22 @@ namespace _Project.Tests.CombatPlayground.Implement
                 target != null ? target.EnemyType.ToString() : "未配置",
                 target != null ? target.CurrentHealth : 0f,
                 target != null ? target.MaxHealth : 0f,
-                target != null && _buffService != null
-                    ? _buffService.GetModifierMultiplier(
+                target != null
+                    ? target.SpeedMultiplier * (_buffService?.GetModifierMultiplier(
                         target,
-                        BuffModifierType.MovementSpeedMultiplier)
+                        BuffModifierType.MovementSpeedMultiplier) ?? 1f)
                     : 1f,
                 energy,
                 _energyService?.MaximumEnergy ?? 0f,
                 _hasSelectedTarget,
                 _autoFire,
+                _skillExecutionMode,
+                enemyAttributes != null ? enemyAttributes.Snapshot : default,
                 _shotCount,
-                skills?.Length ?? 0,
+                skillRunner != null ? skillRunner.SkillCount : 0,
                 _activeProjectile != null ? _activeProjectile.name : "未配置",
+                _activeProjectile != null ? _activeProjectile.SpeedUnitsPerSecond : 0f,
+                _activeProjectile != null ? _activeProjectile.CollisionRadius : 0f,
                 buffDefinition != null ? buffDefinition.name : "未配置",
                 _status,
                 log);

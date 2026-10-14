@@ -11,8 +11,10 @@ namespace EnemySystem
     public sealed class EnemyPopulationController : MonoBehaviour, IEnemyPopulationService
     {
         [Inject] private IEnemySpawner _spawner;
+        [Inject] private EnemyPopulationSettingsSO _populationSettings;
 
         private readonly Subject<Unit> _started = new();
+        private readonly Subject<DifficultyConfig> _difficultyChanged = new();
         private DifficultyConfig _difficulty;
         private NormalPopulationSchedule _normalSchedule;
         private SpecialEnemySpawnSchedule _specialSchedule;
@@ -28,6 +30,7 @@ namespace EnemySystem
         public DifficultyLevel Difficulty { get; private set; }
         public Observable<int> OnEnemiesAliveChanged => _spawner.OnActiveEnemyCountChanged;
         public Observable<Unit> OnPopulationStarted => _started;
+        public Observable<DifficultyConfig> OnDifficultyChanged => _difficultyChanged;
 
         /// <summary>启动当前难度的普通人口和特殊时间表。</summary>
         public void StartPopulation(DifficultyConfig difficulty)
@@ -46,7 +49,7 @@ namespace EnemySystem
             _difficulty = difficulty;
             Difficulty = difficulty.Level;
             MaximumPopulation = difficulty.NormalPopulationTarget;
-            _normalSchedule = new NormalPopulationSchedule(MaximumPopulation);
+            _normalSchedule = CreateNormalSchedule(difficulty);
             _specialSchedule = new SpecialEnemySpawnSchedule(difficulty.SpecialSpawnRules);
             _elapsedTime = 0f;
             _paused = false;
@@ -66,9 +69,10 @@ namespace EnemySystem
             _difficulty = difficulty;
             Difficulty = difficulty.Level;
             MaximumPopulation = difficulty.NormalPopulationTarget;
-            _normalSchedule = new NormalPopulationSchedule(MaximumPopulation);
+            _normalSchedule = CreateNormalSchedule(difficulty);
             _specialSchedule.Replace(difficulty.SpecialSpawnRules);
             _spawnFailureReported = false;
+            _difficultyChanged.OnNext(difficulty);
             return true;
         }
 
@@ -148,10 +152,11 @@ namespace EnemySystem
             return TrySpawn(rule.Prefab, rule.Category);
         }
 
-        /// <summary>满员时等待死亡补位；仅对实际生成故障记录错误。</summary>
+        /// <summary>满员时等待死亡补位，并为本次人口生成选择随机初始旋转。</summary>
         private bool TrySpawn(Enemy prefab, EnemySpawnCategory category)
         {
-            if (_spawner.ActiveEnemyCount >= EnemyPopulationLimits.MaximumAlive)
+            if (_populationSettings != null &&
+                !_populationSettings.HasCapacity(_spawner.ActiveEnemyCount))
             {
                 return false;
             }
@@ -167,11 +172,13 @@ namespace EnemySystem
                 return false;
             }
 
+            Quaternion initialRotation = Random.rotation;
             bool spawned = _spawner.TrySpawnEnemy(
                 prefab,
                 category,
                 _difficulty != null ? _difficulty.EnemyHealthMultiplier : 1f,
-                _difficulty != null ? _difficulty.EnemySpeedMultiplier : 1f);
+                _difficulty != null ? _difficulty.EnemySpeedMultiplier : 1f,
+                initialRotation);
             if (!spawned && !_spawnFailureReported)
             {
                 _spawnFailureReported = true;
@@ -184,7 +191,8 @@ namespace EnemySystem
         /// <summary>检查人口服务、目标数量和普通怪物权重配置。</summary>
         private bool HasRequiredConfig(DifficultyConfig difficulty)
         {
-            if (_spawner == null || difficulty == null || difficulty.NormalPopulationTarget < 0)
+            if (_spawner == null || _populationSettings == null || difficulty == null ||
+                difficulty.NormalPopulationTarget < 0)
             {
                 return false;
             }
@@ -210,6 +218,17 @@ namespace EnemySystem
             }
 
             return false;
+        }
+
+        /// <summary>按难度资产创建普通人口调度器。</summary>
+        /// <param name="difficulty">当前生效的难度配置。</param>
+        /// <returns>使用该难度生成参数的调度器。</returns>
+        private static NormalPopulationSchedule CreateNormalSchedule(DifficultyConfig difficulty)
+        {
+            return new NormalPopulationSchedule(
+                difficulty.NormalPopulationTarget,
+                difficulty.NormalSpawnRatePerSecond,
+                difficulty.NormalPopulationRefillRatio);
         }
 
         /// <summary>暂停普通人口和特殊时间表。</summary>
@@ -246,6 +265,7 @@ namespace EnemySystem
             _destroyed = true;
             StopPopulation();
             _started.Dispose();
+            _difficultyChanged.Dispose();
         }
 
         /// <summary>只执行一次人口清场，避免停止和销毁流程重复归还敌人。</summary>

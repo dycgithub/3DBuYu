@@ -19,6 +19,7 @@ namespace EnemySystem.Components
         private Enemy _enemy;
         private float _currentHealth;
         private float _maxHealth;
+        private float _deathAttackDamageMultiplier = 1f;
         private readonly ReactiveProperty<float> _health01 = new(0f);
 
         /// <summary>当前生命占最大生命的比例，变化时通过 R3 推送。</summary>
@@ -29,6 +30,9 @@ namespace EnemySystem.Components
 
         /// <summary>本次生成的最大生命值。</summary>
         internal float MaxHealth => _maxHealth;
+
+        /// <summary>敌人进入死亡流程前捕获的攻击伤害倍率。</summary>
+        internal float DeathAttackDamageMultiplier => _deathAttackDamageMultiplier;
 
         /// <summary>缓存所属敌人。</summary>
         private void Awake()
@@ -86,6 +90,7 @@ namespace EnemySystem.Components
 
             _maxHealth = attributes.baseHealth * Mathf.Max(0.01f, healthMultiplier);
             _currentHealth = _maxHealth;
+            _deathAttackDamageMultiplier = 1f;
             PublishHealth01();
         }
 
@@ -211,9 +216,11 @@ namespace EnemySystem.Components
             return absorbed;
         }
 
-        /// <summary>强制将当前生命归零，供强制死亡和吞噬使用。</summary>
-        internal void SetHealthToZero()
+        /// <summary>捕获死亡攻击倍率并将当前生命归零。</summary>
+        /// <param name="deathAttackDamageMultiplier">Buff 注销前的攻击伤害倍率。</param>
+        internal void SetHealthToZero(float deathAttackDamageMultiplier)
         {
+            _deathAttackDamageMultiplier = Mathf.Max(0f, deathAttackDamageMultiplier);
             _currentHealth = 0f;
             PublishHealth01();
         }
@@ -236,6 +243,7 @@ namespace EnemySystem.Components
         {
             _currentHealth = 0f;
             _maxHealth = 0f;
+            _deathAttackDamageMultiplier = 1f;
             PublishHealth01();
         }
 

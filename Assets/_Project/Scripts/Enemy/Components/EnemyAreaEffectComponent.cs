@@ -1,6 +1,9 @@
 using System.Collections.Generic;
 using CombatSystem;
+using EnemySystem.AreaEffect.Implement;
 using EnemySystem.AreaEffect;
+using EnemySystem.AreaEffect.Model;
+using FlockingSystem.ECS;
 using Interfaces;
 using Services;
 using SpatialIndexing;
@@ -11,34 +14,39 @@ using VContainer;
 namespace EnemySystem.Components
 {
     /// <summary>
-    /// 为范围效果源保存配置和目标缓存。
-    /// <para>实际调度由 EnemyAreaEffectService 统一驱动，本组件不再拥有逐帧 Update。</para>
+    /// 推进范围精英战术状态，并在 Casting 状态把范围 Buff 交给集中服务处理。
+    /// <para>目标搜索按感知间隔节流；运动命令由 ECS Flocking 桥接提交。</para>
     /// <para>范围只决定可以新增哪些目标；已施加的 Buff 按自身持续时间独立结束。</para>
     /// </summary>
+    [ExecuteAlways]
     [DisallowMultipleComponent]
     [RequireComponent(typeof(Enemy))]
     public sealed class EnemyAreaEffectComponent : MonoBehaviour, IPooledObject, IEnemyActivationListener
     {
-        private const int MaximumAffectedTargets = 50;
+        private const float MaximumAreaEliteSpeed = 2.5f;
 
         [Inject] private ISpatialQueryService _spatialService;
         [Inject] private IPlayerCombatTarget _playerTarget;
         [Inject] private EnemyAreaEffectService _areaEffectService;
 
-        private readonly List<IDamageable> _candidateTargets = new(MaximumAffectedTargets);
-        private readonly List<AffectedTarget> _affectedTargets = new(MaximumAffectedTargets);
+        private readonly List<IDamageable> _candidateTargets = new(EnemyAreaEffectScheduler.MaximumTargets);
+        private readonly List<AffectedTarget> _affectedTargets = new(EnemyAreaEffectScheduler.MaximumTargets);
 
         private Enemy _enemy;
+        private EnemyFlockBridge _flockBridge;
+        private EnemyAreaEffectStateMachine _stateMachine;
+        private EnemyAttributesSO _stateMachineAttributes;
+        private readonly EnemyAreaEffectTargeting _targeting = new();
         private BuffDefinitionSO _runtimeSlowBuff;
         private BuffDefinitionSO _effectBuff;
         private EnemyAreaEffectType _effectType;
         private float _effectRadius;
         private float _effectRadiusSquared;
-        private float _queryInterval;
-        private float _queryTimer;
-        private int _candidateCursor;
+        private float _effectInterval;
+        private float _elapsedSeconds;
         private bool _configurationCached;
         private bool _registered;
+        private readonly EnemyAreaEffectScheduler _scheduler = new();
 
         private struct AffectedTarget
         {
@@ -49,27 +57,32 @@ namespace EnemySystem.Components
         /// <summary>缓存宿主敌人并清空范围状态。</summary>
         private void Awake()
         {
-            TryGetComponent(out _enemy);
+            CacheComponents();
+            InitializeStateMachine();
             ResetState();
         }
 
-        /// <summary>启用时允许立即刷新候选，并尝试登记到集中调度器。</summary>
+        /// <summary>启用时重置周期状态，并尝试登记到集中调度器。</summary>
         private void OnEnable()
         {
+            CacheComponents();
+            InitializeStateMachine();
             ResetState();
+            SubscribeToDeath();
             TryRegister();
         }
 
         /// <summary>禁用时注销调度器并清理本次租借的候选状态。</summary>
         private void OnDisable()
         {
-            Unregister();
+            UnsubscribeFromDeath();
             ResetState();
         }
 
         /// <summary>释放本组件创建的运行时减速定义。</summary>
         private void OnDestroy()
         {
+            UnsubscribeFromDeath();
             Unregister();
             if (_runtimeSlowBuff == null)
             {
@@ -88,10 +101,33 @@ namespace EnemySystem.Components
             _runtimeSlowBuff = null;
         }
 
-        /// <summary>
-        /// 处理一个范围源的当前帧预算。
-        /// </summary>
-        /// <param name="deltaTime">当前帧经过的秒数。</param>
+        /// <summary>逐帧感知目标、推进状态机并提交 ECS 定向运动意图。</summary>
+        private void Update()
+        {
+            if (!Application.isPlaying || _enemy == null || _enemy.IsDead || _enemy.Attributes == null)
+            {
+                return;
+            }
+
+            InitializeStateMachine();
+            if (_stateMachine == null)
+            {
+                return;
+            }
+
+            float deltaTime = Mathf.Max(0f, Time.deltaTime);
+            _targeting.Tick(
+                _enemy,
+                _spatialService,
+                _playerTarget,
+                _stateMachine.CurrentState,
+                deltaTime);
+            _stateMachine.Tick(_targeting.CreateFrame(_enemy, _playerTarget, deltaTime));
+            ApplyMovement(_stateMachine.CurrentIntent, deltaTime);
+        }
+
+        /// <summary>在 Casting 状态推进范围效果周期。</summary>
+        /// <param name="deltaTime">自上次处理以来经过的秒数。</param>
         internal void ProcessFrame(float deltaTime)
         {
             if (_enemy == null)
@@ -99,11 +135,13 @@ namespace EnemySystem.Components
                 TryGetComponent(out _enemy);
             }
 
-            if (!isActiveAndEnabled || _enemy == null || _enemy.IsDead)
+            if (!isActiveAndEnabled || _enemy == null || _enemy.IsDead ||
+                _stateMachine == null || !_stateMachine.IsCasting)
             {
                 return;
             }
 
+            _elapsedSeconds += Mathf.Max(0f, deltaTime);
             CacheConfiguration();
             if (_effectBuff == null)
             {
@@ -111,46 +149,156 @@ namespace EnemySystem.Components
             }
 
             PruneAffectedTargets();
-            _queryTimer -= Mathf.Max(0f, deltaTime);
-            if (_queryTimer <= 0f)
+            if (!_scheduler.TryBeginTick(_elapsedSeconds, _effectInterval))
             {
-                RefreshCandidates();
-                _queryTimer = _queryInterval - Mathf.Max(0f, deltaTime);
+                return;
             }
 
+            RefreshCandidates();
             TryApplyNextTarget();
         }
 
-        /// <summary>对象池租借时重置目标游标和范围状态。</summary>
-        public void OnRentFromPool()
-        {
-            ResetState();
-        }
+        /// <summary>对象池租借时重置候选窗口和范围状态。</summary>
+        public void OnRentFromPool() => ResetState();
 
-        /// <summary>对象池归还时重置目标游标和范围状态。</summary>
-        public void OnReturnToPool()
-        {
-            ResetState();
-        }
+        /// <summary>对象池归还时重置候选窗口和范围状态。</summary>
+        public void OnReturnToPool() => ResetState();
 
         /// <summary>补做宿主激活后的依赖缓存和调度登记。</summary>
         void IEnemyActivationListener.OnEnemyActivationReady()
         {
-            if (_enemy == null)
+            CacheComponents();
+            InitializeStateMachine();
+            TryRegister();
+        }
+
+        /// <summary>死亡时重置战术状态，并保留视觉溶解所需的 ECS 冻结。</summary>
+        private void HandleDeathStarted(Enemy enemy) => ResetState(EnemyFlockMotionMode.Frozen);
+
+        /// <summary>订阅宿主死亡事件，以便立即停止该范围源。</summary>
+        private void SubscribeToDeath()
+        {
+            if (_enemy != null)
             {
-                TryGetComponent(out _enemy);
+                _enemy.DeathStarted -= HandleDeathStarted;
+                _enemy.DeathStarted += HandleDeathStarted;
+            }
+        }
+
+        /// <summary>解除宿主死亡事件订阅。</summary>
+        private void UnsubscribeFromDeath()
+        {
+            if (_enemy != null)
+            {
+                _enemy.DeathStarted -= HandleDeathStarted;
+            }
+        }
+
+        /// <summary>按当前敌人配置创建或复用状态机。</summary>
+        private void InitializeStateMachine()
+        {
+            EnemyAttributesSO attributes = _enemy != null ? _enemy.Attributes : null;
+            if (attributes == null || attributes == _stateMachineAttributes)
+            {
+                return;
             }
 
-            TryRegister();
+            _stateMachineAttributes = attributes;
+            _stateMachine = new EnemyAreaEffectStateMachine(attributes);
+        }
+
+        /// <summary>把状态机意图翻译为 ECS 的群游、定向或保持命令。</summary>
+        private void ApplyMovement(EnemyAreaEffectIntent intent, float deltaTime)
+        {
+            switch (intent)
+            {
+                case EnemyAreaEffectIntent.Flocking:
+                    _flockBridge?.SetMotionMode(EnemyFlockMotionMode.Flocking);
+                    break;
+                case EnemyAreaEffectIntent.Approach:
+                    MoveTowardsTarget(deltaTime);
+                    break;
+                case EnemyAreaEffectIntent.Hold:
+                    SetDirectedMotion(Vector3.zero, transform.rotation);
+                    break;
+                case EnemyAreaEffectIntent.Retreat:
+                    MoveAwayFromPlayer(deltaTime);
+                    break;
+            }
+        }
+
+        /// <summary>向施法目标低速移动至范围效果半径。</summary>
+        private void MoveTowardsTarget(float deltaTime)
+        {
+            IDamageable target = _targeting.Target;
+            if (_flockBridge == null || target == null)
+            {
+                _flockBridge?.SetMotionMode(EnemyFlockMotionMode.Flocking);
+                return;
+            }
+
+            EnemyAreaEffectMotion motion = EnemyAreaEffectMotionMath.Approach(
+                transform.position,
+                transform.rotation,
+                target.Position,
+                _enemy.Attributes.areaEffectRadius,
+                GetMoveSpeed(_enemy.Attributes.areaApproachSpeed),
+                _enemy.Attributes.areaTurnSpeed,
+                deltaTime);
+            SetDirectedMotion(motion.Displacement, motion.Rotation);
+        }
+
+        /// <summary>按生命对应的安全距离沿玩家反方向移动。</summary>
+        private void MoveAwayFromPlayer(float deltaTime)
+        {
+            if (_flockBridge == null || _playerTarget == null ||
+                !_playerTarget.IsAlive || _playerTarget.Transform == null)
+            {
+                _flockBridge?.SetMotionMode(EnemyFlockMotionMode.Flocking);
+                return;
+            }
+
+            float safeDistance = EnemyAreaEffectTactics.RetreatDistance(
+                _enemy.Attributes.areaPreferredDistance,
+                _enemy.Attributes.areaMaximumRetreatDistance,
+                _enemy.HealthPercent);
+            EnemyAreaEffectMotion motion = EnemyAreaEffectMotionMath.Retreat(
+                transform.position,
+                transform.rotation,
+                _playerTarget.Position,
+                safeDistance,
+                GetMoveSpeed(_enemy.Attributes.areaRetreatSpeed),
+                _enemy.Attributes.areaTurnSpeed,
+                deltaTime);
+            SetDirectedMotion(motion.Displacement, motion.Rotation);
+        }
+
+        /// <summary>应用难度与 Buff 倍率后限制范围精英速度。</summary>
+        private float GetMoveSpeed(float configuredSpeed)
+        {
+            return EnemyAreaEffectTactics.ClampSpeed(
+                configuredSpeed,
+                _enemy.GetMovementSpeedMultiplier(),
+                MaximumAreaEliteSpeed);
+        }
+
+        /// <summary>由组件持有 ECS 定向运动命令的提交权。</summary>
+        private void SetDirectedMotion(Vector3 displacement, Quaternion rotation)
+        {
+            if (_flockBridge == null)
+            {
+                return;
+            }
+
+            _flockBridge.SetMotionMode(EnemyFlockMotionMode.Directed);
+            _flockBridge.SetDirectedMotion(displacement, rotation);
         }
 
         /// <summary>登记当前范围源，兼容注入先后顺序和对象池重复激活。</summary>
         private void TryRegister()
         {
-            if (_enemy == null)
-            {
-                TryGetComponent(out _enemy);
-            }
+            CacheComponents();
+            InitializeStateMachine();
 
             if (!isActiveAndEnabled || _areaEffectService == null || _enemy == null ||
                 _enemy.IsDead || _enemy.Attributes == null)
@@ -169,11 +317,13 @@ namespace EnemySystem.Components
         /// <summary>从集中调度器注销当前范围源。</summary>
         private void Unregister()
         {
-            if (_registered)
+            if (!_registered)
             {
-                _areaEffectService?.Unregister(this);
-                _registered = false;
+                return;
             }
+
+            _areaEffectService?.Unregister(this);
+            _registered = false;
         }
 
         /// <summary>读取一次本次租借的范围参数和对应 Buff。</summary>
@@ -185,10 +335,11 @@ namespace EnemySystem.Components
             }
 
             EnemyAttributesSO attributes = _enemy.Attributes;
+            InitializeStateMachine();
             _effectType = attributes.areaEffectType;
             _effectRadius = Mathf.Max(0f, attributes.areaEffectRadius);
             _effectRadiusSquared = _effectRadius * _effectRadius;
-            _queryInterval = Mathf.Max(0.01f, attributes.areaEffectTickInterval);
+            _effectInterval = attributes.areaEffectTickInterval;
             _effectBuff = ResolveEffectBuff(attributes);
             _configurationCached = true;
         }
@@ -196,18 +347,24 @@ namespace EnemySystem.Components
         /// <summary>按范围模式返回减速或持续治疗 Buff。</summary>
         private BuffDefinitionSO ResolveEffectBuff(EnemyAttributesSO attributes)
         {
-            return _effectType == EnemyAreaEffectType.Slow
-                ? GetSlowBuff(attributes)
-                : attributes.areaHealBuff;
+            if (_effectType != EnemyAreaEffectType.Slow)
+            {
+                return attributes.areaHealBuff;
+            }
+
+            _runtimeSlowBuff = EnemyAreaEffectBuffFactory.GetSlowBuff(
+                attributes,
+                _runtimeSlowBuff,
+                name);
+            return _runtimeSlowBuff;
         }
 
-        /// <summary>刷新当前范围内的敌人候选，结果写入本组件的复用缓存。</summary>
+        /// <summary>刷新当前范围内的轮转候选窗口，结果写入复用缓存。</summary>
         private void RefreshCandidates()
         {
-            _candidateTargets.Clear();
-            _candidateCursor = 0;
             if (_spatialService == null)
             {
+                _candidateTargets.Clear();
                 return;
             }
 
@@ -215,30 +372,34 @@ namespace EnemySystem.Components
                 transform.position,
                 _effectRadius,
                 SpatialLayers.Enemy);
-            int targetCount = Mathf.Min(MaximumAffectedTargets, targets.Count);
-            for (int index = 0; index < targetCount; index++)
-            {
-                IDamageable target = targets[index];
-                if (target != null)
-                {
-                    _candidateTargets.Add(target);
-                }
-            }
+            _scheduler.CopyCandidateWindow(targets, _candidateTargets);
         }
 
-        /// <summary>扫描候选并在本帧成功施加一个 Buff 后停止。</summary>
+        /// <summary>每个周期最多成功施加一次；HealAll 优先敌人，未成功时回退到玩家。</summary>
         private void TryApplyNextTarget()
         {
-            if (_affectedTargets.Count < MaximumAffectedTargets &&
-                TryApplyToEnemy())
+            switch (_effectType)
             {
-                return;
+                case EnemyAreaEffectType.Slow:
+                    TryApplyToPlayer();
+                    break;
+                case EnemyAreaEffectType.HealAll:
+                    if (_affectedTargets.Count >= EnemyAreaEffectScheduler.MaximumTargets ||
+                        !TryApplyToEnemy())
+                    {
+                        TryApplyToPlayer();
+                    }
+                    break;
+                case EnemyAreaEffectType.HealEnemies:
+                    if (_affectedTargets.Count < EnemyAreaEffectScheduler.MaximumTargets)
+                    {
+                        TryApplyToEnemy();
+                    }
+                    break;
             }
-
-            TryApplyToPlayer();
         }
 
-        /// <summary>从游标开始跳过已有同类 Buff 的敌人，直到成功施加一次。</summary>
+        /// <summary>按轮转后的窗口顺序跳过无效目标，直到成功施加一次。</summary>
         private bool TryApplyToEnemy()
         {
             int count = _candidateTargets.Count;
@@ -247,10 +408,8 @@ namespace EnemySystem.Components
                 return false;
             }
 
-            int start = _candidateCursor % count;
-            for (int offset = 0; offset < count; offset++)
+            for (int index = 0; index < count; index++)
             {
-                int index = (start + offset) % count;
                 IDamageable target = _candidateTargets[index];
                 if (!IsTargetInRange(target) || target is not IBuffReceiver receiver)
                 {
@@ -263,26 +422,18 @@ namespace EnemySystem.Components
                 }
 
                 RecordAffectedTarget(target);
-                _candidateCursor = (index + 1) % count;
                 return true;
             }
 
-            _candidateCursor = (start + 1) % count;
             return false;
         }
 
         /// <summary>按当前模式尝试给范围内玩家施加一次 Buff。</summary>
-        private bool TryApplyToPlayer()
-        {
-            if (_effectType == EnemyAreaEffectType.HealEnemies ||
-                !IsTargetInRange(_playerTarget) ||
-                _playerTarget is not IBuffReceiver receiver)
-            {
-                return false;
-            }
-
-            return receiver.TryApplyBuffIfAbsent(_effectBuff, GetInstanceID());
-        }
+        private bool TryApplyToPlayer() =>
+            _effectType != EnemyAreaEffectType.HealEnemies &&
+            IsTargetInRange(_playerTarget) &&
+            _playerTarget is IBuffReceiver receiver &&
+            receiver.TryApplyBuffIfAbsent(_effectBuff, GetInstanceID());
 
         /// <summary>记录一个本来源仍占用的受影响目标槽位。</summary>
         private void RecordAffectedTarget(IDamageable target)
@@ -326,65 +477,34 @@ namespace EnemySystem.Components
         }
 
         /// <summary>判断目标存活且仍在当前范围内。</summary>
-        private bool IsTargetInRange(IDamageable target)
-        {
-            return IsAlive(target) &&
-                (target.Position - transform.position).sqrMagnitude <= _effectRadiusSquared;
-        }
+        private bool IsTargetInRange(IDamageable target) => IsAlive(target) &&
+            (target.Position - transform.position).sqrMagnitude <= _effectRadiusSquared;
 
         /// <summary>计算本次受影响目标槽位的自然过期时间。</summary>
-        private float GetExpireAt()
-        {
-            float duration = _effectBuff != null ? _effectBuff.DurationSeconds : 0f;
-            return duration > 0f ? Time.time + duration : float.PositiveInfinity;
-        }
+        private float GetExpireAt() => _effectBuff?.DurationSeconds > 0f
+            ? Time.time + _effectBuff.DurationSeconds : float.PositiveInfinity;
+        /// <summary>缓存敌人宿主和 ECS 运动桥接。</summary>
+        private void CacheComponents() =>
+            (_enemy, _flockBridge) = (_enemy ?? GetComponent<Enemy>(), _flockBridge ?? GetComponent<EnemyFlockBridge>());
 
         /// <summary>判断目标接口引用仍对应有效的 Unity 对象。</summary>
-        private static bool IsAlive(IDamageable target)
+        private static bool IsAlive(IDamageable target) => target != null &&
+            (!(target is Object unityObject) || unityObject != null) &&
+            target.IsAlive;
+
+        /// <summary>清除本次租借的候选、受影响目标和调度状态。</summary>
+        private void ResetState(EnemyFlockMotionMode motionMode = EnemyFlockMotionMode.Flocking)
         {
-            return target != null &&
-                (!(target is Object unityObject) || unityObject != null) &&
-                target.IsAlive;
-        }
-
-        /// <summary>按当前敌人配置生成一个可调整倍率的运行时减速定义。</summary>
-        private BuffDefinitionSO GetSlowBuff(EnemyAttributesSO attributes)
-        {
-            if (attributes == null || attributes.areaSlowBuff == null)
-            {
-                return null;
-            }
-
-            if (_runtimeSlowBuff == null)
-            {
-                _runtimeSlowBuff = ScriptableObject.CreateInstance<BuffDefinitionSO>();
-                _runtimeSlowBuff.name = $"{name}_SlowBuff";
-                _runtimeSlowBuff.ModifierType = attributes.areaSlowBuff.ModifierType;
-                _runtimeSlowBuff.StackGroupId = attributes.areaSlowBuff.StackGroupId;
-                _runtimeSlowBuff.Polarity = attributes.areaSlowBuff.Polarity;
-                _runtimeSlowBuff.DurationSeconds = attributes.areaSlowBuff.DurationSeconds;
-                _runtimeSlowBuff.HealingPerSecond = attributes.areaSlowBuff.HealingPerSecond;
-                _runtimeSlowBuff.StackPolicy = attributes.areaSlowBuff.StackPolicy;
-                _runtimeSlowBuff.MaximumStackCount = attributes.areaSlowBuff.MaximumStackCount;
-                _runtimeSlowBuff.VisualEffectPrefab = attributes.areaSlowBuff.VisualEffectPrefab;
-            }
-
-            _runtimeSlowBuff.ModifierValue = Mathf.Clamp(
-                attributes.areaSlowMultiplier,
-                0f,
-                1f);
-            return _runtimeSlowBuff;
-        }
-
-        /// <summary>清除本次租借的候选、受影响目标和时间状态。</summary>
-        private void ResetState()
-        {
+            Unregister();
             _candidateTargets.Clear();
             _affectedTargets.Clear();
-            _candidateCursor = 0;
-            _queryTimer = 0f;
+            _targeting.Reset();
+            _elapsedSeconds = 0f;
+            _scheduler.Reset();
             _configurationCached = false;
             _effectBuff = null;
+            _stateMachine?.Reset();
+            _flockBridge?.SetMotionMode(motionMode);
         }
     }
 }

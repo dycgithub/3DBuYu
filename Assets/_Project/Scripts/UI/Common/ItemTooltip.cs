@@ -5,12 +5,12 @@ using UnityEngine.UI;
 namespace _Project.UI.Common
 {
     /// <summary>
-    /// Item Tooltip 的 UGUI 展示层。
+    /// 当前语言的 Item Tooltip UGUI 展示层。
     /// 面板和内容控件由 prefab 序列化绑定，本类只刷新内容。
     /// </summary>
     public sealed class ItemTooltip : MonoBehaviour
     {
-        private const string EmptyText = "暂无效果描述";
+        private static string EmptyText => L10n.Get("ui.noEffects");
 
         [Header("References")]
         [SerializeField] private RectTransform _rect;
@@ -67,7 +67,7 @@ namespace _Project.UI.Common
 
             gameObject.SetActive(true);
             if (_nameText != null)
-                _nameText.text = string.IsNullOrWhiteSpace(content.Name) ? "未命名物品" : content.Name;
+                _nameText.text = string.IsNullOrWhiteSpace(content.Name) ? L10n.Get("tooltip.unnamedItem") : content.Name;
 
             if (_detailed)
             {

@@ -5,9 +5,11 @@ namespace GameSystem
 {
     public static class RunRuleMath
     {
-        public const float DefaultOvertimeStartMultiplier = 2f;
-        public const float DefaultOvertimeMultiplierIntervalSeconds = 5f;
-        public const float DefaultOvertimeMultiplierIncrement = 1f;
+        public const float DefaultOvertimeStartMultiplier = 1.5f;
+        public const float DefaultOvertimeMultiplierIntervalSeconds = 15f;
+        public const float DefaultOvertimeMultiplierIncrement = 0.25f;
+        public const float DefaultOvertimeMultiplierMaximum = 3f;
+        private const double RewardRoundingTolerance = 0.001d;
 
         /// <summary>判断本局是否已经达到目标时长。</summary>
         /// <param name="elapsedTime">本局已运行时间。</param>
@@ -33,22 +35,23 @@ namespace GameSystem
             return targetKillCount <= 0 || killCount >= targetKillCount;
         }
 
-        /// <summary>按超时持续时间计算当前能量消耗倍率。</summary>
-        /// <param name="overtimeElapsedTime">超时持续时间。</param>
-        /// <returns>从 2 倍开始、每 5 秒增加 1 倍的倍率。</returns>
+        /// <summary>按默认规则计算当前超时能量消耗倍率。</summary>
+        /// <param name="overtimeElapsedTime">超时持续时间，单位为秒。</param>
+        /// <returns>限制在默认上限内的超时倍率。</returns>
         public static float CalculateOvertimeMultiplier(float overtimeElapsedTime)
         {
             return CalculateOvertimeMultiplier(
                 overtimeElapsedTime,
                 DefaultOvertimeStartMultiplier,
                 DefaultOvertimeMultiplierIntervalSeconds,
-                DefaultOvertimeMultiplierIncrement);
+                DefaultOvertimeMultiplierIncrement,
+                DefaultOvertimeMultiplierMaximum);
         }
 
-        /// <summary>按配置参数计算当前超时能量消耗倍率。</summary>
-        /// <param name="overtimeElapsedTime">超时持续时间。</param>
+        /// <summary>按配置参数计算当前超时倍率。</summary>
+        /// <param name="overtimeElapsedTime">超时持续时间，单位为秒。</param>
         /// <param name="startMultiplier">超时初始倍率。</param>
-        /// <param name="intervalSeconds">倍率增加间隔。</param>
+        /// <param name="intervalSeconds">倍率增加间隔，单位为秒。</param>
         /// <param name="increment">每次增加的倍率。</param>
         /// <returns>当前超时倍率。</returns>
         public static float CalculateOvertimeMultiplier(
@@ -56,6 +59,28 @@ namespace GameSystem
             float startMultiplier,
             float intervalSeconds,
             float increment)
+        {
+            return CalculateOvertimeMultiplier(
+                overtimeElapsedTime,
+                startMultiplier,
+                intervalSeconds,
+                increment,
+                DefaultOvertimeMultiplierMaximum);
+        }
+
+        /// <summary>按配置参数计算当前超时倍率并限制最大值。</summary>
+        /// <param name="overtimeElapsedTime">超时持续时间，单位为秒。</param>
+        /// <param name="startMultiplier">超时初始倍率。</param>
+        /// <param name="intervalSeconds">倍率增加间隔，单位为秒。</param>
+        /// <param name="increment">每次增加的倍率。</param>
+        /// <param name="maximumMultiplier">允许的最大倍率。</param>
+        /// <returns>当前超时倍率。</returns>
+        public static float CalculateOvertimeMultiplier(
+            float overtimeElapsedTime,
+            float startMultiplier,
+            float intervalSeconds,
+            float increment,
+            float maximumMultiplier)
         {
             float safeTime = IsFinite(overtimeElapsedTime) ? Mathf.Max(0f, overtimeElapsedTime) : 0f;
             float safeStart = IsPositiveFinite(startMultiplier)
@@ -65,7 +90,11 @@ namespace GameSystem
                 ? intervalSeconds
                 : DefaultOvertimeMultiplierIntervalSeconds;
             float safeIncrement = IsFinite(increment) ? Mathf.Max(0f, increment) : 0f;
-            return safeStart + Mathf.Floor(safeTime / safeInterval) * safeIncrement;
+            float safeMaximum = IsPositiveFinite(maximumMultiplier)
+                ? Mathf.Max(safeStart, maximumMultiplier)
+                : Mathf.Max(safeStart, DefaultOvertimeMultiplierMaximum);
+            float multiplier = safeStart + Mathf.Floor(safeTime / safeInterval) * safeIncrement;
+            return Mathf.Min(multiplier, safeMaximum);
         }
 
         /// <summary>
@@ -117,8 +146,9 @@ namespace GameSystem
                 return 0;
             }
 
-            double reward = (double)Math.Max(0, basePoints) * difficultyMultiplier +
-                            (double)Math.Max(0, overtimePoints) * overtimeMultiplier;
+            double reward = ((double)Math.Max(0, basePoints) +
+                             (double)Math.Max(0, overtimePoints) * overtimeMultiplier) *
+                            difficultyMultiplier;
             if (double.IsNaN(reward) || reward <= 0d)
             {
                 return 0;
@@ -129,7 +159,7 @@ namespace GameSystem
                 return int.MaxValue;
             }
 
-            return (int)Math.Floor(reward);
+            return (int)Math.Floor(reward + RewardRoundingTolerance);
         }
 
         /// <summary>兼容没有超时积分时的普通结算计算。</summary>

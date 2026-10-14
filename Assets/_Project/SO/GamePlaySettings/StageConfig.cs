@@ -5,13 +5,13 @@ namespace GameSystem
 {
     /// <summary>
     /// 关卡单局参数。
-    /// 时间字段表示目标时长；实际结算规则由战局服务处理。
+    /// 默认目标时长为三分钟；达到后保留超时机制，实际结算规则由战局服务处理。
     /// </summary>
     [CreateAssetMenu(fileName = "StageConfig", menuName = "Game/Stage Config")]
     public class StageConfig : ScriptableObject
     {
         [Tooltip("单局目标时长（秒）。达到后进入超时阶段。")]
-        public float timeLimit = 300f;
+        public float timeLimit = 180f;
 
         [Tooltip("成功结算所需的最低击杀数。0 表示暂不限制。")]
         [Min(0)]
@@ -20,28 +20,32 @@ namespace GameSystem
         [Header("能量")]
         [Tooltip("本局开始时的能量。实际值会被最大能量限制。")]
         [Min(0f)]
-        public float initialEnergy = 100f;
+        public float initialEnergy = 500f;
 
         [Tooltip("本局能量上限。")]
         [Min(0f)]
-        public float maxEnergy = 100f;
+        public float maxEnergy = 1000f;
 
         [Tooltip("本局每经过 1 秒消耗的基础能量；实际消耗会乘当前超时倍率。")]
         [Min(0f)]
-        public float baseEnergyDrainPerSecond = 1f;
+        public float baseEnergyDrainPerSecond = 2f;
 
         [Header("超时")]
         [Tooltip("进入超时时使用的初始能量消耗倍率。")]
         [Min(0f)]
-        public float overtimeStartMultiplier = 2f;
+        public float overtimeStartMultiplier = 1.5f;
 
         [Tooltip("超时倍率增加一次所需的时间（秒）。")]
         [Min(0.01f)]
-        public float overtimeMultiplierIntervalSeconds = 5f;
+        public float overtimeMultiplierIntervalSeconds = 15f;
 
-        [Tooltip("每经过一次超时倍率间隔增加的倍率；不设置上限。")]
+        [Tooltip("每经过一次超时倍率间隔增加的倍率。")]
         [Min(0f)]
-        public float overtimeMultiplierIncrement = 1f;
+        public float overtimeMultiplierIncrement = 0.25f;
+
+        [Tooltip("超时能量消耗倍率上限，避免超时积分和能量消耗无限增长。")]
+        [Min(0f)]
+        public float overtimeMultiplierMaximum = 3f;
 
         [Header("连杀")]
         [Tooltip("两次击杀之间允许保持连杀的最长间隔（秒）。")]

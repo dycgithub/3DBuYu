@@ -5,6 +5,7 @@ using _Project.UI.Animations;
 /// <summary>
 /// UIButtonEffect 的条件 Inspector。
 /// 先显示功能开关，再显示当前已启用功能的参数，避免无效配置占用 Inspector。
+/// 音效区提供进入、退出、按下和可选松开的独立配置。
 /// </summary>
 [CustomEditor(typeof(UIButtonEffect))]
 public sealed class UIButtonEffectEditor : Editor
@@ -38,6 +39,7 @@ public sealed class UIButtonEffectEditor : Editor
 
     private SerializedProperty _soundEnabled;
     private SerializedProperty _hoverSfx;
+    private SerializedProperty _exitSfx;
     private SerializedProperty _pressSfx;
     private SerializedProperty _releaseSfx;
     private SerializedProperty _sfxVolume;
@@ -75,6 +77,7 @@ public sealed class UIButtonEffectEditor : Editor
 
         _soundEnabled = serializedObject.FindProperty("_soundEnabled");
         _hoverSfx = serializedObject.FindProperty("_hoverSfx");
+        _exitSfx = serializedObject.FindProperty("_exitSfx");
         _pressSfx = serializedObject.FindProperty("_pressSfx");
         _releaseSfx = serializedObject.FindProperty("_releaseSfx");
         _sfxVolume = serializedObject.FindProperty("_sfxVolume");
@@ -183,6 +186,7 @@ public sealed class UIButtonEffectEditor : Editor
 
         EditorGUI.indentLevel++;
         DrawProperty(_hoverSfx, "悬停音效名称");
+        DrawProperty(_exitSfx, "退出音效名称");
         DrawProperty(_pressSfx, "按下音效名称");
         DrawProperty(_releaseSfx, "松开音效名称");
         DrawProperty(_sfxVolume, "音量");

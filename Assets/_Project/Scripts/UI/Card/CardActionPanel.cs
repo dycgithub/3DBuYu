@@ -3,15 +3,14 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using VContainer;
+using UnityEngine.Localization;
+using UnityEngine.Localization.Settings;
 
 namespace _Project.UI.Card
 {
-    /// <summary>显示选中卡的共享操作面板，复用手牌可用性结果，释放时重新提交业务校验。</summary>
+    /// <summary>显示当前语言的选中卡操作，复用手牌可用性结果，释放时重新提交业务校验。</summary>
     public sealed class CardActionPanel : MonoBehaviour
     {
-        private const string ReleaseLabel = "释放";
-        private const string CancelLabel = "取消选择";
-
         [SerializeField] private Button releaseButton;
         [SerializeField] private Button cancelButton;
         [SerializeField] private TMP_Text releaseText;
@@ -73,6 +72,7 @@ namespace _Project.UI.Card
 
             releaseButton?.onClick.AddListener(OnReleaseClicked);
             cancelButton?.onClick.AddListener(OnCancelClicked);
+            LocalizationSettings.SelectedLocaleChanged += RefreshLanguage;
             _initialized = true;
         }
 
@@ -93,13 +93,19 @@ namespace _Project.UI.Card
         {
             if (releaseText != null)
             {
-                releaseText.text = ReleaseLabel;
+                releaseText.text = L10n.Get("ui.cast");
             }
 
             if (cancelText != null)
             {
-                cancelText.text = CancelLabel;
+                cancelText.text = L10n.Get("ui.cancel");
             }
+        }
+
+        /// <summary>语言变化只更新按钮文字。</summary>
+        private void RefreshLanguage(Locale _)
+        {
+            SetLabels();
         }
 
         /// <summary>把业务可用性传给现有按钮表现。</summary>
@@ -160,6 +166,7 @@ namespace _Project.UI.Card
 
             releaseButton?.onClick.RemoveListener(OnReleaseClicked);
             cancelButton?.onClick.RemoveListener(OnCancelClicked);
+            LocalizationSettings.SelectedLocaleChanged -= RefreshLanguage;
         }
     }
 }

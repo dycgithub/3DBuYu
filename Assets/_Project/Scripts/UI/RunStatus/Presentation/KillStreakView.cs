@@ -4,11 +4,13 @@ using Services;
 using TMPro;
 using UnityEngine;
 using VContainer;
+using UnityEngine.Localization;
+using UnityEngine.Localization.Settings;
 
 namespace _Project.UI.RunStatus
 {
     /// <summary>
-    /// 将本局连杀状态显示为由 Hierarchy 配置的 UGUI HUD。
+    /// 将本局连杀状态显示为当前语言的预置 UGUI HUD。
     /// <para>视图只订阅服务状态，不创建或配置运行时 UI，也不直接修改战斗数据。</para>
     /// </summary>
     public sealed class KillStreakView : MonoBehaviour
@@ -32,10 +34,6 @@ namespace _Project.UI.RunStatus
         [SerializeField, Min(1f)] private float _punchScale = 1.14f;
         [Tooltip("面板缩放每秒恢复到 1 的速度。")]
         [SerializeField, Min(0f)] private float _scaleRecoverySpeed = 5f;
-        [Tooltip("当前连杀文本格式。")]
-        [SerializeField] private string _currentFormat = "连杀 ×{0}";
-        [Tooltip("最高连杀文本格式。")]
-        [SerializeField] private string _bestFormat = "最高 ×{0}";
 
         [Inject] private IKillStreakService _killStreak;
 
@@ -63,6 +61,7 @@ namespace _Project.UI.RunStatus
 
             _currentSubscription = _killStreak.CurrentStreak.Subscribe(HandleCurrentStreakChanged);
             _bestSubscription = _killStreak.BestStreak.Subscribe(HandleBestStreakChanged);
+            LocalizationSettings.SelectedLocaleChanged += RefreshLanguage;
         }
 
         private void Update()
@@ -92,6 +91,7 @@ namespace _Project.UI.RunStatus
 
         private void OnDestroy()
         {
+            LocalizationSettings.SelectedLocaleChanged -= RefreshLanguage;
             _currentSubscription?.Dispose();
             _bestSubscription?.Dispose();
         }
@@ -104,7 +104,7 @@ namespace _Project.UI.RunStatus
         private void HandleCurrentStreakChanged(int streak)
         {
             int normalizedStreak = Mathf.Max(0, streak);
-            _currentLabel.text = string.Format(_currentFormat, normalizedStreak);
+            _currentLabel.text = L10n.Get("hud.streak", normalizedStreak);
 
             if (normalizedStreak > _lastStreak && normalizedStreak > 0)
             {
@@ -121,7 +121,19 @@ namespace _Project.UI.RunStatus
 
         private void HandleBestStreakChanged(int streak)
         {
-            _bestLabel.text = string.Format(_bestFormat, Mathf.Max(0, streak));
+            _bestLabel.text = L10n.Get("hud.bestStreak", Mathf.Max(0, streak));
+        }
+
+        /// <summary>语言变化只刷新文字，不重播连杀反馈动画。</summary>
+        private void RefreshLanguage(Locale _)
+        {
+            if (_killStreak == null || !HasReferences())
+            {
+                return;
+            }
+
+            _currentLabel.text = L10n.Get("hud.streak", Mathf.Max(0, _killStreak.CurrentStreak.CurrentValue));
+            HandleBestStreakChanged(_killStreak.BestStreak.CurrentValue);
         }
     }
 }

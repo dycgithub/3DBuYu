@@ -1,0 +1,13 @@
+LiquidSurface water texture source
+
+Source: https://proctexture.com/textures/water/normal-maps/ocean-normal-map
+Download: https://proctexture.com/pbr-packs/water/ocean-normal-map.zip
+Pack: Ocean Normal Map 1K PBR Pack
+License: CC0 (as stated on the source page)
+
+Imported maps:
+- LiquidSurface_WaterNormal.png: water normal detail
+- LiquidSurface_WaterHeight.png: height/breakup detail
+- LiquidSurface_WaterRoughness.png: roughness modulation
+
+Downloaded with operator approval. The maps are used by the LiquidSurface UI Shader; the shader supplies interaction waves procedurally.

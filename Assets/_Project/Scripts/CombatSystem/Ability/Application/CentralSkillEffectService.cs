@@ -91,7 +91,7 @@ namespace CombatSystem
 
                 if (_buffService != null && motionTarget is IBuffTarget buffTarget)
                 {
-                    // 正式运行时永久效果只进入场景级 BuffManner，不在 Enemy 或本服务中保存目标状态。
+                    // 正式运行时永久效果只进入场景级 BuffService，不在 Enemy 或本服务中保存目标状态。
                     _buffService.SetPermanentMovementSpeedMultiplier(
                         buffTarget,
                         speedMultiplier,

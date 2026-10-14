@@ -11,6 +11,8 @@ namespace Services
         DifficultyLevel Difficulty { get; }
         Observable<int> OnEnemiesAliveChanged { get; }
         Observable<Unit> OnPopulationStarted { get; }
+        /// <summary>人口服务成功应用新难度后发布目标配置。</summary>
+        Observable<DifficultyConfig> OnDifficultyChanged { get; }
         void StartPopulation(DifficultyConfig difficulty);
 
         /// <summary>

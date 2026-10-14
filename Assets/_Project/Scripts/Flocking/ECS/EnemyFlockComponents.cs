@@ -3,6 +3,14 @@ using Unity.Mathematics;
 
 namespace FlockingSystem.ECS
 {
+    /// <summary>定义敌人由群游、定向行为或冻结状态驱动。</summary>
+    public enum EnemyFlockMotionMode : byte
+    {
+        Flocking,
+        Directed,
+        Frozen
+    }
+
     /// <summary>集中保存 ECS Flocking 使用的容量上限。</summary>
     internal static class EnemyFlockLimits
     {
@@ -14,8 +22,8 @@ namespace FlockingSystem.ECS
     }
 
     /// <summary>
-    /// 单个敌人的群游配置和运行时速度状态。
-    /// <para>该组件只保存模拟输入和状态，不负责 Transform 提交或渲染。</para>
+    /// 单个敌人的群游配置、运动所有权和一次性运动命令。
+    /// <para>该组件保存模拟输入；最终姿态由提交系统写入托管 Transform。</para>
     /// </summary>
     public struct EnemyFlockAgent : IComponentData
     {
@@ -43,11 +51,20 @@ namespace FlockingSystem.ECS
         /// <summary>模拟允许的最大速度，单位为世界单位/秒。</summary>
         public float MaxSpeed;
 
-        /// <summary>为 true 时只消费外部冲量，不执行群游转向。</summary>
-        public bool UseExternalMotion;
+        /// <summary>当前姿态的运动所有权模式。</summary>
+        public EnemyFlockMotionMode MotionMode;
 
         /// <summary>待下一次群游模拟消费的外部速度冲量。</summary>
         public float3 ExternalImpulse;
+
+        /// <summary>待下一次模拟消费的一次性世界位移。</summary>
+        public float3 ExternalDisplacement;
+
+        /// <summary>定向状态下一次模拟消费的世界位移。</summary>
+        public float3 DirectedDisplacement;
+
+        /// <summary>定向状态使用的世界旋转。</summary>
+        public quaternion DirectedRotation;
     }
 
     /// <summary>模拟阶段写入、提交阶段消费的下一姿态。</summary>

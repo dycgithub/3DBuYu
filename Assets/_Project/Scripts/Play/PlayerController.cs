@@ -10,18 +10,17 @@ namespace Play
         [Header("引用")]
         [SerializeField] private SphereWalker _walker;
         [SerializeField] private StaminaController _stamina;
-        [Inject]
-        [SerializeField] private Camera _movementCamera;
-
         [Header("移动")]
         public float moveSpeed = 8f;
         public bool invertVertical;
         public bool invertHorizontal;
 
         [Inject] private IInputService _input;
+        [Inject] private ICombatPhaseService _combatPhase;
+        [Inject] private ICameraMovementBasis _movementBasis;
         private PlayerCombatTarget _combatTarget;
 
-        /// <summary>绑定玩家组件及实际输出画面的主相机。</summary>
+        /// <summary>绑定玩家组件；移动方向由注入的逻辑摄像机基底提供。</summary>
         private void Awake()
         {
             if (_walker == null)
@@ -35,9 +34,14 @@ namespace Play
             _combatTarget = GetComponent<PlayerCombatTarget>();
         }
 
-        /// <summary>按输入强度计算本帧弧长；画面方向在两极仍保持连续。</summary>
+        /// <summary>仅在 Playing 阶段读取输入、推进耐力并按弧长移动。</summary>
         private void Update()
         {
+            if (!_combatPhase.CanPerformCombatActions)
+            {
+                return;
+            }
+
             Vector2 mv = _input.Move;
             float inputX = mv.x;
             float inputY = mv.y;
@@ -53,7 +57,12 @@ namespace Play
             Vector2 input = new Vector2(invertHorizontal ? -inputX : inputX,
                 invertVertical ? -inputY : inputY);
             Vector3 normal = (_walker.transform.position - _walker.GetEffectiveCenter()).normalized;
-            Vector3 direction = GetMoveDirection(input, normal, _movementCamera.transform.rotation);
+            if (_movementBasis == null)
+            {
+                return;
+            }
+
+            Vector3 direction = _movementBasis.GetMoveDirection(input, normal);
             float speedMultiplier = _combatTarget != null
                 ? _combatTarget.GetMovementSpeedMultiplier()
                 : 1f;
@@ -61,18 +70,5 @@ namespace Play
                 direction,
                 direction.magnitude * moveSpeed * speedMultiplier * Time.deltaTime);
         }
-
-        /// <summary>将镜头平面旋转至球面切平面，保留正交方向与模拟输入强度。</summary>
-        /// <param name="input">屏幕左右、上下输入。</param>
-        /// <param name="normal">玩家所在球面的单位法线。</param>
-        /// <param name="cameraRotation">当前输出镜头的世界朝向。</param>
-        /// <returns>长度不超过一的世界切线。</returns>
-        private static Vector3 GetMoveDirection(Vector2 input, Vector3 normal, Quaternion cameraRotation)
-        {
-            Vector2 clamped = Vector2.ClampMagnitude(input, 1f);
-            Quaternion alignment = Quaternion.FromToRotation(cameraRotation * Vector3.back, normal);
-            return alignment * (cameraRotation * new Vector3(clamped.x, clamped.y, 0f));
-        }
     }
-
 }

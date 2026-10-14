@@ -33,8 +33,6 @@ namespace GameSystem
     {
         [Header("关卡(单局)配置")]
         [SerializeField] private StageConfig stageConfig;
-        [SerializeField] private BattlePassConfig battlePassConfig;
-        [SerializeField] private PlayerLevelConfig playerLevelConfig;
 
         [Header("系统引用")]
         [Inject] private IPointsService _points;
@@ -54,8 +52,6 @@ namespace GameSystem
         [Inject] private TransmitterAttackLoadout _transmitterAttackLoadout;
         [Inject] private IInventoryTransferStorage _inventoryTransferStorage;
 
-        private PlayerLevelManager _playerLevelManager;
-        private BattlePassManager _battlePassManager;
         private GameObject _playerInstance;
         private int _lastSettlementReward;
         private bool _isStartingLevel;
@@ -79,6 +75,9 @@ namespace GameSystem
         /// <summary>获取本局是否已经进入超时阶段。</summary>
         public bool IsOvertime => _session.IsOvertime;
 
+        /// <summary>获取当前关卡配置的目标时长，单位为秒。</summary>
+        internal float TargetDuration => stageConfig != null ? Mathf.Max(0f, stageConfig.timeLimit) : 0f;
+
         /// <summary>获取本局已经经过的超时时间。</summary>
         public float OvertimeElapsedTime => _session.OvertimeElapsedTime;
 
@@ -87,12 +86,6 @@ namespace GameSystem
 
         /// <summary>获取本局能量服务。</summary>
         public IEnergyService Energy => _energy;
-
-        /// <summary>获取玩家等级管理器。</summary>
-        public PlayerLevelManager PlayerLevel => _playerLevelManager;
-
-        /// <summary>获取通行证管理器。</summary>
-        public BattlePassManager BattlePass => _battlePassManager;
 
         /// <summary>获取当前生成的玩家对象。</summary>
         public GameObject PlayerInstance => _playerInstance;
@@ -146,19 +139,9 @@ namespace GameSystem
 
         int Services.IGameEventService.NotifyEnemyKilled(int pointsValue) => OnEnemyKilled(pointsValue);
 
-        /// <summary>
-        /// 初始化玩家等级、通行证和状态机事件订阅。
-        /// </summary>
+        /// <summary>初始化状态机事件订阅。</summary>
         private void Awake()
         {
-            _playerLevelManager = new PlayerLevelManager();
-            _playerLevelManager.Initialize(playerLevelConfig);
-            _playerLevelManager.LoadFromSave(SaveSystem.LoadPlayerLevelData());
-
-            _battlePassManager = new BattlePassManager();
-            _battlePassManager.Initialize(battlePassConfig);
-            _battlePassManager.LoadFromSave(SaveSystem.LoadBattlePassData());
-
             _stateMachine.OnStateChanged += HandleStateChanged;
         }
 
@@ -197,24 +180,12 @@ namespace GameSystem
             }
         }
 
-        /// <summary>
-        /// 注销状态机事件、清理本局状态并保存永久进度。
-        /// </summary>
+        /// <summary>注销状态机事件并清理本局战斗状态。</summary>
         private void OnDestroy()
         {
             _stateMachine.OnStateChanged -= HandleStateChanged;
             DeactivateRunSubscriptions();
             ClearCombatRunState();
-
-            if (_playerLevelManager != null)
-            {
-                SaveSystem.SavePlayerLevelData(_playerLevelManager.GetSaveData());
-            }
-
-            if (_battlePassManager != null)
-            {
-                SaveSystem.SaveBattlePassData(_battlePassManager.GetSaveData());
-            }
         }
 
         /// <summary>
@@ -248,7 +219,7 @@ namespace GameSystem
                 return;
             }
 
-            SetEnergyConsumptionMultiplier(OvertimeMultiplier);
+            SetEnergyConsumptionMultiplier(GetEnergyMultiplier());
             _energy.Tick(deltaTime, stageConfig != null ? stageConfig.baseEnergyDrainPerSecond : 0f);
         }
 
@@ -291,7 +262,7 @@ namespace GameSystem
             _energyDepletedDuringStart = false;
             ActivateRunSubscriptions();
             _energy?.Initialize(stageConfig.initialEnergy, stageConfig.maxEnergy);
-            SetEnergyConsumptionMultiplier(1f);
+            SetEnergyConsumptionMultiplier(GetEnergyMultiplier());
 
             _stateMachine.ChangeState(GameState.Playing);
             SpawnPlayer();
@@ -339,6 +310,7 @@ namespace GameSystem
 
             _difficultySelection.Commit(target);
             _session.ChangeDifficulty(target.DifficultyId);
+            SetEnergyConsumptionMultiplier(GetEnergyMultiplier());
             OnDifficultyChanged?.Invoke(target);
             return true;
         }
@@ -396,7 +368,6 @@ namespace GameSystem
             if (_lastSettlementReward > 0)
             {
                 _points.AddPoints(_lastSettlementReward, "本局胜利结算");
-                _playerLevelManager?.AddLifetimePoints(_lastSettlementReward);
             }
 
             ClearCombatRunState();
@@ -549,8 +520,18 @@ namespace GameSystem
                 _session.EnterOvertime(_session.ElapsedTime - targetDuration);
             }
 
-            SetEnergyConsumptionMultiplier(OvertimeMultiplier);
+            SetEnergyConsumptionMultiplier(GetEnergyMultiplier());
             return _stateMachine.CurrentState == GameState.Playing;
+        }
+
+        /// <summary>计算当前难度和阶段共同作用的能量消耗倍率。</summary>
+        /// <returns>应用于攻击、接触和时间消耗的倍率。</returns>
+        private float GetEnergyMultiplier()
+        {
+            float difficultyMultiplier = CurrentDifficulty != null
+                ? CurrentDifficulty.EnergyConsumptionMultiplier
+                : 1f;
+            return difficultyMultiplier * OvertimeMultiplier;
         }
 
         /// <summary>将当前阶段倍率同步到统一能量消耗服务。</summary>
@@ -576,7 +557,8 @@ namespace GameSystem
                 _session.OvertimeElapsedTime,
                 stageConfig.overtimeStartMultiplier,
                 stageConfig.overtimeMultiplierIntervalSeconds,
-                stageConfig.overtimeMultiplierIncrement);
+                stageConfig.overtimeMultiplierIncrement,
+                stageConfig.overtimeMultiplierMaximum);
         }
 
         /// <summary>

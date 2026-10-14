@@ -26,7 +26,7 @@ namespace CombatSystem
         private readonly CentralSkillLoadout _centralSkillLoadout;
         private bool _isExecuting;
 
-        /// <summary>注入玩家规则和唯一技能执行入口；测试可省略场景施法者。</summary>
+        /// <summary>注入玩家规则和唯一执行入口，并从容器可选查询场景施法者。</summary>
         [Inject]
         public SkillActivationService(
             IEnergyService energyService,
@@ -36,8 +36,7 @@ namespace CombatSystem
             SkillHand skillHand,
             ICombatItemConsumptionService itemConsumptionService,
             ISkillExecutionService skillExecutionService,
-            Play.CentralCore caster = null,
-            CentralSkillLoadout centralSkillLoadout = null)
+            IObjectResolver resolver)
         {
             _energy = energyService;
             _phase = phaseService;
@@ -46,8 +45,10 @@ namespace CombatSystem
             _hand = skillHand;
             _items = itemConsumptionService;
             _executor = skillExecutionService ?? throw new ArgumentNullException(nameof(skillExecutionService));
-            _caster = caster;
-            _centralSkillLoadout = centralSkillLoadout;
+            _caster = resolver.TryResolve(out Play.CentralCore caster) ? caster : null;
+            _centralSkillLoadout = resolver.TryResolve(out CentralSkillLoadout centralSkillLoadout)
+                ? centralSkillLoadout
+                : null;
         }
 
         /// <summary>查询基础规则与目标存在性，不创建施法快照、不消费资源。</summary>
@@ -90,7 +91,7 @@ namespace CombatSystem
             }
         }
 
-        /// <summary>准备成功后消费一次资源，再提交整卡伤害并更新本局状态。</summary>
+        /// <summary>完整准备后消费来源并提交；失败退出自动取消尚未提交的投射物。</summary>
         private SkillActivationResult Activate(int cardId)
         {
             SkillActivationFailureReason reason = CheckConditions(cardId, out SkillCardState card);
@@ -106,7 +107,7 @@ namespace CombatSystem
                 return Failure(SkillActivationFailureReason.InsufficientEnergy, card);
             }
 
-            var batch = new SkillDamageBatch(card.SourceItemInstanceId);
+            using var batch = SkillDamageBatch.CreateTransaction(card.SourceItemInstanceId);
             reason = Prepare(card, batch);
             if (reason != SkillActivationFailureReason.None || (batch.Count > 0 && _damage == null))
             {

@@ -76,13 +76,15 @@ namespace EnemySystem.Components
             }
         }
 
-        /// <summary>在战斗阶段允许时提交一次敌人死亡奖励。</summary>
+        /// <summary>跳过非击杀类死亡，其余死亡按配置提交一次奖励。</summary>
         /// <param name="enemy">触发死亡事件的敌人。</param>
         private void HandleDeath(Enemy enemy)
         {
             if (_rewarded ||
                 enemy == null ||
-                enemy.DeathCause == EnemyDeathCause.Consumed)
+                enemy.DeathCause == EnemyDeathCause.Consumed ||
+                enemy.DeathCause == EnemyDeathCause.PlayerContact ||
+                enemy.DeathCause == EnemyDeathCause.ParentDied)
             {
                 return;
             }

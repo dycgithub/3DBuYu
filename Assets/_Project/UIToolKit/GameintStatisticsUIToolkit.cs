@@ -1,4 +1,3 @@
-using System;
 using GameSystem;
 using R3;
 using Services;
@@ -7,30 +6,73 @@ using UnityEngine.UIElements;
 using VContainer;
 
 /// <summary>
-/// 显示 GameScene 本局战斗统计的 UI Toolkit 视图。
-/// 视觉树由 UXML 配置，运行时只负责绑定战斗服务并更新 Label。
+/// 按需显示本局积分、当前连杀和本局总击杀的 UI Toolkit HUD。
+/// UXML 负责布局，服务和 GameManager 提供权威数据，本组件只负责计时、计数反馈、显隐和生命周期。
 /// </summary>
-public sealed class GameintStatisticsUIToolkit : MonoBehaviour
+public sealed partial class GameintStatisticsUIToolkit : MonoBehaviour
 {
+    private const string HiddenClass = "is-hidden";
+    private const string ImpactClass = "is-impact";
+    private const float PanelVisibleDuration = 1.2f;
+    private const float PanelEntryDuration = 0.14f;
+    private const float CardEntryDuration = 0.12f;
+    private const float StepInterval = 0.035f;
+    private const float FastestStepInterval = 0.006f;
+    private const int FastStepThreshold = 40;
+    private const int MaxStepsPerFrame = 128;
+    private const float ImpactDuration = 0.22f;
+    private const float ImpactFlashDuration = 0.12f;
+    private const float StepPunchDuration = 0.1f;
+    private const float StepLiftDuration = 0.1f;
+    private const float StepLift = 4f;
+    private const float MaximumMagnitudeScale = 1.24f;
+    private const float MagnitudeScalePerDigit = 0.06f;
+    private const float PointsPunch = 0.08f;
+    private const float StreakPunch = 0.18f;
+    private const float KillsPunch = 0.12f;
+
+    private struct CounterMotion
+    {
+        public int Value;
+        public int Target;
+        public int RenderedValue;
+        public float StepTimer;
+        public float PunchTime;
+        public float PunchDuration;
+        public float FlashTime;
+        public float LiftTime;
+        public float EntryTime;
+    }
+
+    [Header("显示")]
+    [SerializeField, Tooltip("是否显示战斗数字面板；关闭后只更新数字，顶部计时仍显示。")]
+    private bool _showPanel = true;
     [SerializeField] private UIDocument _uiDocument;
 
     [Inject] private GameManager _gameManager;
     [Inject] private IGameEventService _gameEvents;
     [Inject] private IKillStreakService _killStreak;
-    [Inject] private IEnemyPopulationService _population;
-    [Inject] private IPointsService _points;
+
     private readonly CompositeDisposable _subscriptions = new();
-    private Label _difficultyLabel;
-    private Label _currentStreakLabel;
-    private Label _bestStreakLabel;
-    private Label _totalKillsLabel;
-    private Label _enemyCountLabel;
-    private Label _globalPointsLabel;
-    private Label _elapsedTimeLabel;
-    private Label _victoryRewardLabel;
+    private VisualElement _panel;
+    private VisualElement _pointsCard;
+    private VisualElement _streakCard;
+    private VisualElement _killsCard;
+    private Label _remainingTimeLabel;
+    private Label _pointsLabel;
+    private Label _streakLabel;
+    private Label _killsLabel;
+    private CounterMotion _pointsMotion;
+    private CounterMotion _streakMotion;
+    private CounterMotion _killsMotion;
+    private float _hideTimer;
+    private float _panelEntryTime;
+    private int _displayedTimeSeconds = int.MinValue;
+    private bool _displayedOvertime;
+    private bool _initialized;
 
     /// <summary>
-    /// 获取 UIDocument 的视觉树并建立所有战斗状态订阅。
+    /// 获取 UXML 视觉树，初始化隐藏状态并建立战斗数据订阅。
     /// </summary>
     private void Start()
     {
@@ -45,22 +87,32 @@ public sealed class GameintStatisticsUIToolkit : MonoBehaviour
             return;
         }
 
-        BindLabels(_uiDocument.rootVisualElement);
-        if (!HasAllLabels())
+        BindValues(_uiDocument.rootVisualElement);
+        if (!HasAllValues())
         {
-            Debug.LogWarning("[GameintStatisticsUIToolkit] UXML 缺少统计 Label。", this);
+            Debug.LogWarning("[GameintStatisticsUIToolkit] UXML 缺少计时或战斗数字控件。", this);
             return;
         }
 
-        Subscribe();
+        _initialized = true;
         RefreshAll();
+        Subscribe();
     }
 
     /// <summary>
-    /// 释放 R3 订阅和 GameManager 事件，避免场景卸载后继续访问视觉树。
+    /// 在运行时修改 Inspector 开关时立即清理或保留 HUD 的按需显示能力。
+    /// </summary>
+    private void OnValidate()
+    {
+        ApplyVisibility();
+    }
+
+    /// <summary>
+    /// 释放 R3 订阅和战斗事件，避免场景卸载后继续访问视觉树。
     /// </summary>
     private void OnDestroy()
     {
+        _initialized = false;
         _subscriptions.Dispose();
 
         if (_gameEvents != null)
@@ -71,46 +123,34 @@ public sealed class GameintStatisticsUIToolkit : MonoBehaviour
         if (_gameManager != null)
         {
             _gameManager.OnGameStarted -= HandleGameStarted;
-            _gameManager.OnDifficultyChanged -= HandleDifficultyChanged;
             _gameManager.OnRunTimeChanged -= HandleRunTimeChanged;
+            _gameManager.OnSettled -= HandleSettled;
         }
     }
 
     /// <summary>
-    /// 将 UXML 中预先配置的 Label 缓存到视图字段。
+    /// 缓存 UXML 中的计时 Label、面板、卡片和三个数字 Label。
     /// </summary>
-    private void BindLabels(VisualElement root)
+    private void BindValues(VisualElement root)
     {
-        _difficultyLabel = root.Q<Label>("difficulty-label");
-        _currentStreakLabel = root.Q<Label>("current-streak-label");
-        _bestStreakLabel = root.Q<Label>("best-streak-label");
-        _totalKillsLabel = root.Q<Label>("total-kills-label");
-        _enemyCountLabel = root.Q<Label>("enemy-count-label");
-        _globalPointsLabel = root.Q<Label>("global-points-label");
-        _elapsedTimeLabel = root.Q<Label>("elapsed-time-label");
-        _victoryRewardLabel = root.Q<Label>("victory-reward-label");
+        _panel = root.Q<VisualElement>("statistics-panel");
+        _pointsCard = root.Q<VisualElement>("points-card");
+        _streakCard = root.Q<VisualElement>("streak-card");
+        _killsCard = root.Q<VisualElement>("kills-card");
+        _remainingTimeLabel = root.Q<Label>("remaining-time-value");
+        _pointsLabel = root.Q<Label>("points-value");
+        _streakLabel = root.Q<Label>("streak-value");
+        _killsLabel = root.Q<Label>("kills-value");
     }
 
     /// <summary>
-    /// 订阅本局战斗状态的事实流。
+    /// 订阅当前连杀状态、击杀事件、结算事件和新局事件。
     /// </summary>
     private void Subscribe()
     {
         if (_killStreak != null)
         {
-            _subscriptions.Add(_killStreak.CurrentStreak.Subscribe(HandleCurrentStreakChanged));
-            _subscriptions.Add(_killStreak.BestStreak.Subscribe(HandleBestStreakChanged));
-        }
-
-        if (_population != null)
-        {
-            _subscriptions.Add(_population.OnPopulationStarted.Subscribe(_ => RefreshDifficulty()));
-            _subscriptions.Add(_population.OnEnemiesAliveChanged.Subscribe(_ => RefreshEnemyCount()));
-        }
-
-        if (_points != null)
-        {
-            _subscriptions.Add(_points.Points.Subscribe(HandlePointsChanged));
+            _subscriptions.Add(_killStreak.CurrentStreak.Subscribe(HandleStreakChanged));
         }
 
         if (_gameEvents != null)
@@ -121,148 +161,297 @@ public sealed class GameintStatisticsUIToolkit : MonoBehaviour
         if (_gameManager != null)
         {
             _gameManager.OnGameStarted += HandleGameStarted;
-            _gameManager.OnDifficultyChanged += HandleDifficultyChanged;
             _gameManager.OnRunTimeChanged += HandleRunTimeChanged;
+            _gameManager.OnSettled += HandleSettled;
         }
     }
 
     /// <summary>
-    /// 刷新所有当前值，覆盖视图晚于战斗服务启动的情况。
+    /// 读取计时和战斗统计的权威状态；开局或新局切换不会强行弹出数字面板。
     /// </summary>
     private void RefreshAll()
     {
-        RefreshDifficulty();
-        RefreshEnemyCount();
-        RefreshTotalKills();
-        RefreshGlobalPoints();
-        RefreshElapsedTime();
-        RefreshVictoryReward();
+        int points = _gameManager?.Session != null
+            ? Mathf.Max(0, _gameManager.Session.SessionPoints)
+            : 0;
+        int kills = _gameManager?.Session != null
+            ? Mathf.Max(0, _gameManager.Session.KillCount)
+            : 0;
+        int streak = _killStreak != null
+            ? Mathf.Max(0, _killStreak.CurrentStreak.CurrentValue)
+            : 0;
+
+        SetImmediate(ref _pointsMotion, points);
+        SetImmediate(ref _streakMotion, streak);
+        SetImmediate(ref _killsMotion, kills);
+        RefreshTime(_gameManager?.Session != null ? _gameManager.Session.ElapsedTime : 0f);
+        HidePanel();
     }
 
-    private void HandleCurrentStreakChanged(int value)
-    {
-        _currentStreakLabel.text = $"当前连杀：{Mathf.Max(0, value)}";
-    }
-
-    private void HandleBestStreakChanged(int value)
-    {
-        _bestStreakLabel.text = $"最高连杀：{Mathf.Max(0, value)}";
-    }
-
-    private void HandlePointsChanged(int value)
-    {
-        RefreshGlobalPoints(value);
-        RefreshVictoryReward();
-    }
-
-    private void HandleElapsedTimeChanged(float value)
-    {
-        int totalSeconds = Mathf.Max(0, Mathf.FloorToInt(value));
-        int minutes = totalSeconds / 60;
-        int seconds = totalSeconds % 60;
-        _elapsedTimeLabel.text = $"经过时间：{minutes:D2}:{seconds:D2}";
-    }
-
-    private void RefreshElapsedTime()
-    {
-        if (_gameManager?.Session != null)
-        {
-            HandleElapsedTimeChanged(_gameManager.Session.ElapsedTime);
-        }
-    }
-
-    private void HandleEnemyKilled(int _)
-    {
-        RefreshTotalKills();
-        RefreshVictoryReward();
-    }
-
+    /// <summary>按当前战局阶段更新剩余时间或超时累计时间。</summary>
     private void HandleRunTimeChanged(float elapsedTime)
     {
-        HandleElapsedTimeChanged(elapsedTime);
-        RefreshVictoryReward();
+        RefreshTime(elapsedTime);
     }
 
+    /// <summary>倒计时向上取整，超时计时向下取整，并仅在秒数变化时刷新文本。</summary>
+    private void RefreshTime(float elapsedTime)
+    {
+        if (_remainingTimeLabel == null)
+        {
+            return;
+        }
+
+        bool isOvertime = _gameManager != null && _gameManager.IsOvertime;
+        float seconds = isOvertime
+            ? _gameManager.OvertimeElapsedTime
+            : Mathf.Max(0f, (_gameManager != null ? _gameManager.TargetDuration : 0f) - elapsedTime);
+        int totalSeconds = isOvertime
+            ? Mathf.FloorToInt(Mathf.Max(0f, seconds))
+            : Mathf.CeilToInt(seconds);
+        if (_displayedTimeSeconds == totalSeconds && _displayedOvertime == isOvertime)
+        {
+            return;
+        }
+
+        _displayedTimeSeconds = totalSeconds;
+        _displayedOvertime = isOvertime;
+        int minutes = totalSeconds / 60;
+        int remainder = totalSeconds % 60;
+        string prefix = isOvertime ? "+" : string.Empty;
+        _remainingTimeLabel.text = $"{prefix}{minutes:D2}:{remainder:D2}";
+    }
+
+    /// <summary>
+    /// 击杀事件发生在 GameManager 写入本局会话数据之后，更新积分和总击杀目标。
+    /// </summary>
+    private void RefreshAfterKill()
+    {
+        int points = _gameManager?.Session != null
+            ? Mathf.Max(0, _gameManager.Session.SessionPoints)
+            : 0;
+        int kills = _gameManager?.Session != null
+            ? Mathf.Max(0, _gameManager.Session.KillCount)
+            : 0;
+
+        UpdateCounter(ref _pointsMotion, points, _pointsLabel, _pointsCard);
+        UpdateCounter(ref _killsMotion, kills, _killsLabel, _killsCard);
+    }
+
+    /// <summary>
+    /// 将当前连杀目标设置为服务推送的值，并只显示发生变化的连杀卡片。
+    /// </summary>
+    private void HandleStreakChanged(int value)
+    {
+        UpdateCounter(ref _streakMotion, value, _streakLabel, _streakCard);
+    }
+
+    /// <summary>
+    /// 响应一次有效击杀，推进积分和本局总击杀的逐点动画。
+    /// </summary>
+    private void HandleEnemyKilled(int _)
+    {
+        RefreshAfterKill();
+    }
+
+    /// <summary>
+    /// 结算前未派发击杀事件时，补读最后一次本局积分和击杀变化。
+    /// </summary>
+    private void HandleSettled(bool _, int __)
+    {
+        RefreshAfterKill();
+    }
+
+    /// <summary>
+    /// 新局开始时清除上一局的数字、计时和卡片可见状态。
+    /// </summary>
     private void HandleGameStarted()
     {
         RefreshAll();
     }
 
-    private void HandleDifficultyChanged(DifficultyConfig _)
+    /// <summary>
+    /// 更新单个计数目标；数据变化时显示对应卡片，否则保持隐藏。
+    /// </summary>
+    private void UpdateCounter(
+        ref CounterMotion motion,
+        int value,
+        Label valueLabel,
+        VisualElement card)
     {
-        RefreshDifficulty();
-        RefreshVictoryReward();
+        if (!SetTarget(ref motion, value))
+        {
+            return;
+        }
+
+        if (!_showPanel)
+        {
+            SetImmediate(ref motion, motion.Target);
+            RenderCounter(ref motion, valueLabel);
+            ResetVisual(valueLabel, card);
+            return;
+        }
+
+        RevealCounter(ref motion, card);
+        RevealPanel();
     }
 
-    private void RefreshDifficulty()
+    /// <summary>
+    /// 按 Inspector 开关关闭 HUD；重新开启后等待下一次数值变化再显示。
+    /// </summary>
+    private void ApplyVisibility()
     {
-        if (_population != null)
+        if (!_initialized || _panel == null || _showPanel)
         {
-            _difficultyLabel.text = $"难度：{FormatDifficulty(_population.Difficulty)}";
+            return;
+        }
+
+        HidePanel();
+    }
+
+    /// <summary>
+    /// 显示发生变化的卡片，并在首次出现时播放短暂入场缩放。
+    /// </summary>
+    private static void RevealCounter(ref CounterMotion motion, VisualElement card)
+    {
+        bool wasHidden = card.ClassListContains(HiddenClass);
+        card.EnableInClassList(HiddenClass, false);
+        if (wasHidden)
+        {
+            motion.EntryTime = CardEntryDuration;
         }
     }
 
-    private void RefreshEnemyCount()
+    /// <summary>
+    /// 显示整个面板并重置自动隐藏计时。
+    /// </summary>
+    private void RevealPanel()
     {
-        int alive = _population != null ? Mathf.Max(0, _population.EnemiesAlive) : 0;
-        _enemyCountLabel.text = $"当前敌人：{alive}";
-    }
-
-    private void RefreshTotalKills()
-    {
-        int kills = _gameManager?.Session != null ? _gameManager.Session.KillCount : 0;
-        _totalKillsLabel.text = $"本局总击杀：{Mathf.Max(0, kills)}";
-    }
-
-    private void RefreshVictoryReward()
-    {
-        int basePoints = _gameManager != null ? Mathf.Max(0, _gameManager.BaseSessionPoints) : 0;
-        int overtimePoints = _gameManager != null ? Mathf.Max(0, _gameManager.OvertimeSessionPoints) : 0;
-        float settlementMultiplier = _gameManager != null ? _gameManager.SettlementMultiplier : 1f;
-        float overtimeMultiplier = _gameManager != null ? Mathf.Max(1f, _gameManager.OvertimeMultiplier) : 1f;
-        int reward = _gameManager != null ? Mathf.Max(0, _gameManager.VictoryRewardPreview) : 0;
-        _victoryRewardLabel.text =
-            $"胜利奖励：floor({basePoints} × {settlementMultiplier:0.##} + " +
-            $"{overtimePoints} × {overtimeMultiplier:0.##}) = {reward}";
-    }
-
-    private void RefreshGlobalPoints()
-    {
-        if (_points != null)
+        if (!_showPanel)
         {
-            RefreshGlobalPoints(_points.Points.CurrentValue);
+            return;
+        }
+
+        bool wasHidden = _panel.ClassListContains(HiddenClass);
+        _panel.EnableInClassList(HiddenClass, false);
+        if (wasHidden)
+        {
+            _panelEntryTime = PanelEntryDuration;
+            _panel.style.scale = new Scale(Vector3.one * 0.88f);
+            _panel.style.opacity = 0f;
+        }
+
+        _hideTimer = PanelVisibleDuration;
+    }
+
+    /// <summary>
+    /// 将计数器直接设置为目标值，用于初始化、隐藏和新局重置。
+    /// </summary>
+    private static void SetImmediate(ref CounterMotion motion, int value)
+    {
+        int normalized = Mathf.Max(0, value);
+        motion.Value = normalized;
+        motion.Target = normalized;
+        motion.RenderedValue = int.MinValue;
+        motion.StepTimer = 0f;
+        motion.PunchTime = 0f;
+        motion.PunchDuration = 0f;
+        motion.FlashTime = 0f;
+        motion.LiftTime = 0f;
+        motion.EntryTime = 0f;
+    }
+
+    /// <summary>
+    /// 设置计数器目标；新目标到来时从当前数字继续，不排队堆积旧动画。
+    /// </summary>
+    private static bool SetTarget(ref CounterMotion motion, int value)
+    {
+        int normalized = Mathf.Max(0, value);
+        if (motion.Target == normalized)
+        {
+            return false;
+        }
+
+        bool willIncrease = normalized > motion.Value;
+        motion.Target = normalized;
+        motion.StepTimer = 0f;
+        if (willIncrease)
+        {
+            motion.PunchTime = ImpactDuration;
+            motion.PunchDuration = ImpactDuration;
+            motion.FlashTime = ImpactFlashDuration;
+        }
+        else
+        {
+            motion.PunchTime = 0f;
+            motion.PunchDuration = 0f;
+            motion.FlashTime = 0f;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 按未缩放时间推进面板、逐点数字和自动隐藏计时。
+    /// </summary>
+    private void Update()
+    {
+        if (!_initialized || !_showPanel)
+        {
+            return;
+        }
+
+        float deltaTime = Time.unscaledDeltaTime;
+        if (deltaTime <= 0f || !IsFinite(deltaTime))
+        {
+            return;
+        }
+
+        TickPanel(deltaTime);
+        bool stepped = TickCounter(
+            ref _pointsMotion,
+            _pointsLabel,
+            _pointsCard,
+            PointsPunch,
+            deltaTime);
+        stepped |= TickCounter(
+            ref _streakMotion,
+            _streakLabel,
+            _streakCard,
+            StreakPunch,
+            deltaTime);
+        stepped |= TickCounter(
+            ref _killsMotion,
+            _killsLabel,
+            _killsCard,
+            KillsPunch,
+            deltaTime);
+
+        if (stepped)
+        {
+            _hideTimer = PanelVisibleDuration;
+        }
+        else
+        {
+            _hideTimer = Mathf.Max(0f, _hideTimer - deltaTime);
+        }
+
+        if (_hideTimer <= 0f && !HasActiveMotion())
+        {
+            HidePanel();
         }
     }
 
-    private void RefreshGlobalPoints(int value)
+    /// <summary>检查 UXML 是否包含计时、面板、三张卡片和三个数字 Label。</summary>
+    private bool HasAllValues()
     {
-        _globalPointsLabel.text = $"全局剩余积分：{Mathf.Max(0, value)}";
-    }
-
-    private bool HasAllLabels()
-    {
-        return _difficultyLabel != null &&
-               _currentStreakLabel != null &&
-               _bestStreakLabel != null &&
-               _totalKillsLabel != null &&
-               _enemyCountLabel != null &&
-               _globalPointsLabel != null &&
-               _elapsedTimeLabel != null &&
-               _victoryRewardLabel != null;
-    }
-
-    private static string FormatDifficulty(DifficultyLevel level)
-    {
-        return level switch
-        {
-            DifficultyLevel.Easy => "1 简单",
-            DifficultyLevel.Normal => "2 普通",
-            DifficultyLevel.Advanced => "3 进阶",
-            DifficultyLevel.Expert => "4 专家",
-            DifficultyLevel.Nightmare => "5 噩梦",
-            DifficultyLevel.Extreme => "6 究极",
-            DifficultyLevel.Impossible => "7 ??通过",
-            _ => "未知"
-        };
+        return _panel != null &&
+               _pointsCard != null &&
+               _streakCard != null &&
+               _killsCard != null &&
+               _remainingTimeLabel != null &&
+               _pointsLabel != null &&
+               _streakLabel != null &&
+               _killsLabel != null;
     }
 }

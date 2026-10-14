@@ -1,5 +1,6 @@
 using EnemySystem;
 using R3;
+using UnityEngine;
 
 namespace Services
 {
@@ -21,12 +22,14 @@ namespace Services
         /// <param name="category">生成分类。</param>
         /// <param name="healthMultiplier">生命倍率。</param>
         /// <param name="speedMultiplier">速度倍率。</param>
+        /// <param name="initialRotation">本次生成使用的世界初始旋转。</param>
         /// <returns>实际生成成功时返回 true，失败不消费配额。</returns>
         bool TrySpawnEnemy(
             Enemy prefab,
             EnemySpawnCategory category,
             float healthMultiplier,
-            float speedMultiplier);
+            float speedMultiplier,
+            Quaternion initialRotation);
 
         /// <summary>读取指定生成分类的实际存活数。</summary>
         int CountCategory(EnemySpawnCategory category);

@@ -2,6 +2,7 @@ using Unity.Burst;
 using Unity.Burst.Intrinsics;
 using Unity.Collections;
 using Unity.Entities;
+using GeometricMotion;
 using Unity.Jobs;
 using Unity.Mathematics;
 using Unity.Transforms;
@@ -10,10 +11,12 @@ using SpatialIndexing;
 namespace FlockingSystem.ECS
 {
     /// <summary>
-    /// 调度敌人群游的快照、空间网格和 Boids 模拟 Job。
-    /// 模拟阶段只写入 ECS 的下一帧姿态，由提交系统负责同步表现对象。
+    /// 调度敌人群游的快照、空间网格和移动模式模拟 Job。
+    /// 模拟阶段只生成 ECS 下一姿态，由提交系统负责最终 Transform 写入。
     /// </summary>
     [UpdateInGroup(typeof(SimulationSystemGroup))]
+    [UpdateBefore(typeof(GeometricMotionSystem))]
+    [UpdateBefore(typeof(TransformSystemGroup))]
     public partial struct EnemyFlockSimulationSystem : ISystem
     {
         /// <summary>启用代理的群游模拟查询。</summary>
@@ -26,6 +29,7 @@ namespace FlockingSystem.ECS
         private ComponentTypeHandle<EnemyFlockAgent> _agentReadOnlyHandle;
         private ComponentTypeHandle<EnemyFlockAgent> _agentReadWriteHandle;
         private ComponentTypeHandle<EnemyFlockNextPose> _nextPoseHandle;
+        private ComponentTypeHandle<GeometricMotionInput> _motionInputHandle;
         private ComponentTypeHandle<EnemyFlockBridgeIndex> _bridgeIndexHandle;
         private ComponentTypeHandle<EnemyFlockChunkGoal> _chunkGoalHandle;
         private EntityTypeHandle _entityHandle;
@@ -37,6 +41,7 @@ namespace FlockingSystem.ECS
                 ComponentType.ReadOnly<LocalTransform>(),
                 ComponentType.ReadOnly<EnemyFlockAgent>(),
                 ComponentType.ReadWrite<EnemyFlockNextPose>(),
+                ComponentType.ReadWrite<GeometricMotionInput>(),
                 ComponentType.ReadOnly<EnemyFlockBridgeIndex>(),
                 ComponentType.ReadOnly<EnemyFlockActive>(),
                 ComponentType.ChunkComponent<EnemyFlockChunkGoal>());
@@ -47,6 +52,7 @@ namespace FlockingSystem.ECS
             _agentReadOnlyHandle = state.GetComponentTypeHandle<EnemyFlockAgent>(true);
             _agentReadWriteHandle = state.GetComponentTypeHandle<EnemyFlockAgent>(false);
             _nextPoseHandle = state.GetComponentTypeHandle<EnemyFlockNextPose>(false);
+            _motionInputHandle = state.GetComponentTypeHandle<GeometricMotionInput>(false);
             _bridgeIndexHandle = state.GetComponentTypeHandle<EnemyFlockBridgeIndex>(true);
             _chunkGoalHandle = state.GetComponentTypeHandle<EnemyFlockChunkGoal>(false);
             _entityHandle = state.GetEntityTypeHandle();
@@ -80,6 +86,7 @@ namespace FlockingSystem.ECS
             _agentReadOnlyHandle.Update(ref state);
             _agentReadWriteHandle.Update(ref state);
             _nextPoseHandle.Update(ref state);
+            _motionInputHandle.Update(ref state);
             _bridgeIndexHandle.Update(ref state);
             _chunkGoalHandle.Update(ref state);
             _entityHandle.Update(ref state);
@@ -113,6 +120,7 @@ namespace FlockingSystem.ECS
                 LocalTransformHandle = _localTransformHandle,
                 AgentHandle = _agentReadWriteHandle,
                 NextPoseHandle = _nextPoseHandle,
+                MotionInputHandle = _motionInputHandle,
                 BridgeIndexHandle = _bridgeIndexHandle,
                 ChunkGoalHandle = _chunkGoalHandle,
                 Active = grid.Active,
@@ -144,6 +152,7 @@ namespace FlockingSystem.ECS
         [ReadOnly] public ComponentTypeHandle<LocalTransform> LocalTransformHandle;
         public ComponentTypeHandle<EnemyFlockAgent> AgentHandle;
         public ComponentTypeHandle<EnemyFlockNextPose> NextPoseHandle;
+        public ComponentTypeHandle<GeometricMotionInput> MotionInputHandle;
         [ReadOnly] public ComponentTypeHandle<EnemyFlockBridgeIndex> BridgeIndexHandle;
         public ComponentTypeHandle<EnemyFlockChunkGoal> ChunkGoalHandle;
 
@@ -188,6 +197,7 @@ namespace FlockingSystem.ECS
             var transforms = chunk.GetNativeArray(ref LocalTransformHandle);
             var agents = chunk.GetNativeArray(ref AgentHandle);
             var nextPoses = chunk.GetNativeArray(ref NextPoseHandle);
+            var motionInputs = chunk.GetNativeArray(ref MotionInputHandle);
             var bridgeIndices = chunk.GetNativeArray(ref BridgeIndexHandle);
             var entityEnumerator = new ChunkEntityEnumerator(
                 useEnabledMask,
@@ -206,13 +216,16 @@ namespace FlockingSystem.ECS
                 }
 
                 EnemyFlockAgent agent = agents[entityIndex];
+                GeometricMotionInput motionInput = default;
                 EnemyFlockNextPose nextPose = SimulateAgent(
                     ref agent,
+                    ref motionInput,
                     position,
                     transforms[entityIndex].Rotation,
                     steeringSlot,
                     goal.GoalPosition);
                 agents[entityIndex] = agent;
+                motionInputs[entityIndex] = motionInput;
                 nextPoses[entityIndex] = nextPose;
             }
         }
@@ -282,25 +295,52 @@ namespace FlockingSystem.ECS
             return true;
         }
 
-        /// <summary>消费一个代理的外部冲量，执行群游积分并生成下一姿态。</summary>
+        /// <summary>消费代理运动命令，并根据移动模式生成下一姿态。</summary>
+        /// <param name="agent">要更新的敌人群游和运动数据。</param>
+        /// <param name="position">本步使用的世界位置。</param>
+        /// <param name="rotation">本步使用的世界旋转。</param>
+        /// <param name="steeringSlot">邻居查询使用的槽位。</param>
+        /// <param name="goalPosition">当前群游目标点。</param>
+        /// <returns>由提交系统应用的下一姿态。</returns>
         private EnemyFlockNextPose SimulateAgent(
             ref EnemyFlockAgent agent,
+            ref GeometricMotionInput motionInput,
             float3 position,
             quaternion rotation,
             int steeringSlot,
             float3 goalPosition)
         {
-            float3 externalDisplacement = agent.ExternalImpulse * math.max(0f, DeltaTime);
-            if (agent.UseExternalMotion)
+            float3 externalDisplacement = agent.ExternalImpulse * math.max(0f, DeltaTime) + agent.ExternalDisplacement;
+            agent.ExternalImpulse = float3.zero;
+            agent.ExternalDisplacement = float3.zero;
+            motionInput.DeltaTime = DeltaTime;
+
+            if (agent.MotionMode == EnemyFlockMotionMode.Frozen)
             {
-                agent.ExternalImpulse = float3.zero;
+                return CreatePose(position, rotation);
+            }
+
+            if (agent.MotionMode == EnemyFlockMotionMode.Directed)
+            {
+                float3 directedDisplacement = agent.DirectedDisplacement;
+                agent.DirectedDisplacement = float3.zero;
+                motionInput.Velocity = DeltaTime > 0f
+                    ? directedDisplacement / DeltaTime
+                    : float3.zero;
                 return new EnemyFlockNextPose
                 {
-                    Position = position + externalDisplacement,
-                    Rotation = rotation,
+                    Position = position + directedDisplacement + externalDisplacement,
+                    Rotation = agent.DirectedRotation,
                 };
             }
 
+            if (agent.MotionMode != EnemyFlockMotionMode.Flocking)
+            {
+                return CreatePose(position, rotation);
+            }
+
+            agent.DirectedDisplacement = float3.zero;
+            float3 previousVelocity = agent.Velocity;
             float3 velocity = agent.Velocity;
             if (math.lengthsq(velocity) <= MinimumVelocitySquared)
             {
@@ -324,6 +364,15 @@ namespace FlockingSystem.ECS
             agent.Velocity = velocity;
             agent.Speed = math.length(velocity);
 
+            float speedMultiplier = math.max(0f, agent.SpeedMultiplier);
+            float3 worldAcceleration = DeltaTime > 0f
+                ? (velocity - previousVelocity) * speedMultiplier / DeltaTime
+                : float3.zero;
+            motionInput.Velocity = velocity * speedMultiplier;
+            motionInput.LocalAcceleration = math.mul(
+                math.inverse(rotation),
+                worldAcceleration);
+
             bool outsideBounds = math.any(
                 position < Config.SwimCenter - Config.SwimLimits)
                 || math.any(position > Config.SwimCenter + Config.SwimLimits);
@@ -345,8 +394,7 @@ namespace FlockingSystem.ECS
                     math.saturate(rotationSpeed * DeltaTime));
             }
 
-            // 外部冲量只消费一次；普通群游位移由更新后的速度计算。
-            agent.ExternalImpulse = float3.zero;
+            // 群游位移来自 Boids 速度；外部命令在此步只消费一次。
             return new EnemyFlockNextPose
             {
                 Position = position + EnemyFlockBoidsMath.CalculateMovementDelta(
@@ -460,6 +508,13 @@ namespace FlockingSystem.ECS
                 + math.normalizesafe(goal, float3.zero) * Config.GoalWeight
                 + math.normalizesafe(boundary, float3.zero) * Config.BoundaryWeight;
         }
+
+        /// <summary>创建只保留当前位置和旋转的下一姿态。</summary>
+        /// <param name="position">世界坐标位置。</param>
+        /// <param name="rotation">世界坐标旋转。</param>
+        /// <returns>位置和旋转均不变的下一姿态。</returns>
+        private static EnemyFlockNextPose CreatePose(float3 position, quaternion rotation) =>
+            new() { Position = position, Rotation = rotation };
 
         /// <summary>在游动区域内生成一个随机世界目标点。</summary>
         private float3 GetRandomGoal(ref Random random)

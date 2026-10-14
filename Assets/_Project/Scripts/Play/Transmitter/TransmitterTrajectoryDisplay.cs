@@ -4,15 +4,16 @@ using Interfaces;
 using Services;
 using UnityEngine;
 using VContainer;
+using Play.TargetMark;
 
 namespace Play
 {
     /// <summary>
-    /// 显示单个端口的轨迹预测。
-    /// <para>子弹配置和基础射程来自绑定端口的 <see cref="TransmitterSO"/>。</para>
+    /// 显示单个端口的轨迹预测，并使用 FirePoint 作为世界射程球心。
+    /// <para>端口基础值、装备修正和玩家生成偏移均与实际攻击构建一致。</para>
     /// </summary>
     [RequireComponent(typeof(LineRenderer))]
-    public class TransmitterTrajectoryDisplay : MonoBehaviour
+    public partial class TransmitterTrajectoryDisplay : MonoBehaviour
     {
         [Header("开关")]
         [SerializeField] private bool showTrajectory = true;
@@ -41,10 +42,16 @@ namespace Play
         private bool _initialized;
 
         /// <summary>无状态轨迹算法由当前显示组件直接拥有，不占用容器作用域。</summary>
-        private readonly IProjectileTrajectorySimulationService _trajectorySimulation =
+        private readonly ProjectileTrajectoryPredictor _trajectorySimulation =
             new ProjectileTrajectoryPredictor();
+        [Inject] private TransmitterAttackBuildService _attackBuildService;
+        [Inject] private ITransmitterGlobalEffectService _globalEffects;
+        [Inject] private ISpatialQueryService _spatialQueryService;
+        [Inject] private IInputService _input;
+        [Inject] private Camera _camera;
         [Inject] private OptionsService options;
         [Inject] private ICombatPhaseService _combatPhase;
+        [Inject] private MarkedTargetService _markedTarget;
 
         /// <summary>获取当前轨迹显示绑定的端口索引。</summary>
         public int PortIndex => portIndex;
@@ -121,27 +128,113 @@ namespace Play
                 TryInitializeFromHierarchy();
             }
 
-            ProjectileProfileSO profile = _port?.So?.defaultProjectileProfile;
             if (!_initialized || _port.IsLocked || _firePoint == null ||
-                _trajectorySimulation == null || profile == null)
+                _trajectorySimulation == null)
+            {
+                HideVisuals();
+                return;
+            }
+
+            IDamageable target = ResolveAimTarget();
+            Vector3 rangeOrigin = _firePoint.position;
+            Vector3 launchDirection = _firePoint.forward;
+
+            ProjectileProfileSO profile = _port.So.defaultProjectileProfile;
+            float rangeMultiplier = 1f;
+            float collisionRadius = profile != null
+                ? profile.CollisionRadius
+                : 0f;
+            int projectileCount = Mathf.Max(1, _port.So.projectileCount);
+            if (_attackBuildService != null)
+            {
+                TransmitterAttackInput attackInput = new(
+                    _centralCore.GetInstanceID(),
+                    _port.PortIndex,
+                    profile,
+                    rangeOrigin,
+                    launchDirection,
+                    _port.So.baseDamage,
+                    _port.So.baseRange,
+                    _port.So.attacksPerSecond,
+                    _port.So.projectileCount,
+                    _port.So.penetration,
+                    _port.So.criticalChance,
+                    _port.So.criticalDamage,
+                    _port.PortId,
+                    _port.FireSound,
+                    _port.FireEffectId,
+                    _firePoint,
+                    target,
+                    _port.So.projectileSpawnOffset);
+                TransmitterAttackBuild attackBuild = _attackBuildService.BuildAttackParameters(
+                    in attackInput);
+                if (attackBuild.ProjectileProfile != null)
+                {
+                    profile = attackBuild.ProjectileProfile;
+                }
+
+                rangeMultiplier = attackBuild.RangeMultiplier;
+                collisionRadius = attackBuild.CollisionRadius;
+                projectileCount = Mathf.Max(1, attackBuild.ProjectileCount);
+            }
+
+            if (profile == null)
             {
                 HideVisuals();
                 return;
             }
 
             float maximumTravelDistance = Mathf.Min(
-                NormalizeDistance(_port.So.baseRange),
+                NormalizeDistance(_port.So.baseRange) * Mathf.Max(0f, rangeMultiplier),
                 NormalizeDistance(profile.MaximumTravelDistance));
+            maximumTravelDistance = NormalizeDistance(maximumTravelDistance);
             EnsurePointBuffer(profile, maximumTravelDistance);
-            IDamageable target = _detector.GetTarget(portIndex);
-            _trajectorySimulation.PredictTrajectory(
+
+            if (profile.EmitProjectilesSequentially && profile.SequentialProjectileCount > 0)
+            {
+                projectileCount = profile.SequentialProjectileCount;
+            }
+
+            Vector3 projectileOrigin = ProjectileLaunchPattern.GetOriginPosition(
+                rangeOrigin,
+                launchDirection,
+                projectileCount,
+                0,
+                ProjectileLaunchPattern.GetMinimumSpacing(profile, collisionRadius));
+            float scatterAngle = profile.EmitProjectilesSequentially
+                ? 0f
+                : profile.ScatterAngleDegrees;
+            Vector3 projectileDirection = ProjectileLaunchPattern.GetDirection(
+                launchDirection,
+                projectileCount,
+                0,
+                scatterAngle);
+            if (target.IsAliveAndValid())
+            {
+                Vector3 targetDirection = target.Position - projectileOrigin;
+                projectileDirection = targetDirection.sqrMagnitude > 0.0001f
+                    ? targetDirection.normalized
+                    : launchDirection;
+            }
+
+            if (projectileDirection.sqrMagnitude <= 0.0001f)
+            {
+                projectileDirection = launchDirection;
+            }
+
+            projectileDirection.Normalize();
+            Vector3 startPosition = projectileOrigin + projectileDirection *
+                Mathf.Max(0f, _port.So.projectileSpawnOffset);
+            _trajectorySimulation.PredictTrajectoryWithinRange(
                 profile,
                 maximumTravelDistance,
-                _firePoint.position,
-                _firePoint.forward,
+                rangeOrigin,
+                startPosition,
+                projectileDirection,
                 target,
                 _points,
-                _predictionTimeStep);
+                _predictionTimeStep,
+                _spatialQueryService);
 
             _lineRenderer.startColor = trajectoryColor;
             _lineRenderer.endColor = trajectoryColor;
@@ -149,7 +242,11 @@ namespace Play
             _lineRenderer.endWidth = Mathf.Max(0.01f, lineWidth);
             _lineRenderer.positionCount = _points.Length;
             _lineRenderer.SetPositions(_points);
-            UpdateRangeEndpoint(_firePoint.forward);
+            UpdateRangeEndpoint(
+                projectileDirection,
+                profile,
+                rangeOrigin,
+                maximumTravelDistance);
         }
 
         /// <summary>从父级层级查找依赖并执行一次初始化。</summary>
@@ -206,7 +303,7 @@ namespace Play
             return null;
         }
 
-        /// <summary>确保采样数量足够，并调整步长使终点覆盖最大射程。</summary>
+        /// <summary>按轨迹总路径设置采样时间，回旋镖包含完整往返。</summary>
         private void EnsurePointBuffer(
             ProjectileProfileSO profile,
             float maximumTravelDistance)
@@ -217,18 +314,11 @@ namespace Play
                 _points = new Vector3[pointCount];
             }
 
-            float speed = NormalizeDistance(profile.SpeedUnitsPerSecond);
-            float requestedTimeStep = NormalizeTimeStep(timeStep);
-            if (speed <= 0f || maximumTravelDistance <= 0f)
-            {
-                _predictionTimeStep = requestedTimeStep;
-                return;
-            }
-
-            float requestedDistance = speed * requestedTimeStep * (pointCount - 1);
-            _predictionTimeStep = requestedDistance >= maximumTravelDistance
-                ? requestedTimeStep
-                : maximumTravelDistance / (speed * (pointCount - 1));
+            _predictionTimeStep = ProjectileTrajectoryPredictor.ResolveTimeStep(
+                profile,
+                maximumTravelDistance,
+                timeStep,
+                pointCount);
         }
 
         /// <summary>配置射程终点环线的渲染参数。</summary>
@@ -252,8 +342,16 @@ namespace Play
             }
         }
 
-        /// <summary>将射程终点写成垂直于弹道方向的发光圆环。</summary>
-        private void UpdateRangeEndpoint(Vector3 direction)
+        /// <summary>将射程边界写成垂直于弹道方向的发光圆环。</summary>
+        /// <param name="direction">本次发射的中心方向。</param>
+        /// <param name="profile">最终装备合成的投射物配置。</param>
+        /// <param name="rangeOrigin">FirePoint 世界射程球心。</param>
+        /// <param name="maximumTravelDistance">本次攻击的有效射程。</param>
+        private void UpdateRangeEndpoint(
+            Vector3 direction,
+            ProjectileProfileSO profile,
+            Vector3 rangeOrigin,
+            float maximumTravelDistance)
         {
             if (_rangeEndpoint == null || _points == null || _points.Length == 0)
             {
@@ -279,7 +377,9 @@ namespace Play
             right.Normalize();
             Vector3 up = Vector3.Cross(forward, right).normalized;
             float radius = Mathf.Max(0.01f, endpointRadius);
-            Vector3 center = _points[_points.Length - 1];
+            Vector3 center = profile.TrajectoryDefinition is BoomerangTrajectoryDefinitionSO
+                ? rangeOrigin + forward * maximumTravelDistance
+                : _points[_points.Length - 1];
             for (int index = 0; index < pointCount; index++)
             {
                 float angle = index / (float)endpointSegments * Mathf.PI * 2f;

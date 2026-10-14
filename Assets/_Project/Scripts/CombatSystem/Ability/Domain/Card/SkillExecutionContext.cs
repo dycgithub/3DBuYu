@@ -15,12 +15,15 @@ namespace CombatSystem
         public float EffectScale => Supply.ItemPowerTable.GetScale(PowerLevel);
         /// <summary>由 DI 提供的中央场景效果接缝；动作资产不直接访问场景。</summary>
         public ICentralSkillEffectService CentralEffects { get; }
+        /// <summary>场景投射物提交边界；动作资产不自行创建模拟器。</summary>
+        public IProjectileLauncher Projectiles { get; }
 
         /// <summary>将调用方请求与执行器分配的攻击编号组合为独立上下文。</summary>
         internal SkillExecutionContext(
             in SkillExecutionRequest request,
             int attackInstanceId,
-            ICentralSkillEffectService centralEffects)
+            ICentralSkillEffectService centralEffects,
+            IProjectileLauncher projectiles = null)
         {
             Definition = request.Definition;
             SourceInstanceId = request.SourceInstanceId;
@@ -28,6 +31,7 @@ namespace CombatSystem
             AttackInstanceId = attackInstanceId;
             PowerLevel = request.PowerLevel;
             CentralEffects = centralEffects;
+            Projectiles = projectiles;
         }
     }
 }

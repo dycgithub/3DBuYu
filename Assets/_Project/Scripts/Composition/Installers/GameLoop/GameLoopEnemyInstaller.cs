@@ -1,4 +1,5 @@
 using System;
+using EnemySystem;
 using EnemySystem.AreaEffect;
 using EnemySystem.Spawning;
 using EnemySystem.Visual;
@@ -14,16 +15,22 @@ using VContainer.Unity;
 public sealed class GameLoopEnemyInstaller : IInstaller
 {
     private readonly EnemyFlockSettingsSO _enemyFlockSettings;
+    private readonly EnemyPopulationSettingsSO _enemyPopulationSettings;
     private readonly string _scopeName;
 
     /// <summary>
     /// 创建敌人注册器，并接收 Scope 名称以保持配置错误信息。
     /// </summary>
     /// <param name="enemyFlockSettings">GameLoopLifetimeScope 的群游配置资产。</param>
+    /// <param name="enemyPopulationSettings">GameLoopLifetimeScope 的全局敌群容量配置。</param>
     /// <param name="scopeName">GameLoopLifetimeScope.name，用于配置错误信息。</param>
-    public GameLoopEnemyInstaller(EnemyFlockSettingsSO enemyFlockSettings, string scopeName)
+    public GameLoopEnemyInstaller(
+        EnemyFlockSettingsSO enemyFlockSettings,
+        EnemyPopulationSettingsSO enemyPopulationSettings,
+        string scopeName)
     {
         _enemyFlockSettings = enemyFlockSettings;
+        _enemyPopulationSettings = enemyPopulationSettings;
         _scopeName = scopeName;
     }
 
@@ -39,7 +46,14 @@ public sealed class GameLoopEnemyInstaller : IInstaller
                 $"[GameLoopLifetimeScope] {_scopeName}: 未配置 EnemyFlockSettings，无法启动 ECS Flocking。");
         }
 
+        if (_enemyPopulationSettings == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameLoopLifetimeScope] {_scopeName}: 未配置 EnemyPopulationSettings，无法启动敌人生成。");
+        }
+
         builder.RegisterInstance(_enemyFlockSettings).AsSelf();
+        builder.RegisterInstance(_enemyPopulationSettings).AsSelf();
         builder.RegisterEntryPoint<EnemyFlockRuntimeService>(Lifetime.Singleton).AsSelf();
         builder.RegisterEntryPoint<EnemyVisualSystem>(Lifetime.Singleton).AsSelf();
         builder.RegisterEntryPoint<EnemyAreaEffectService>(Lifetime.Singleton).AsSelf();

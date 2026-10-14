@@ -4,10 +4,12 @@ using TMPro;
 using UnityEngine;
 using _Project.UI.Animations;
 using _Project.UI.Tutorial.Model;
+using UnityEngine.Localization;
+using UnityEngine.Localization.Settings;
 
 namespace _Project.UI.Tutorial.View
 {
-    /// <summary>显示教程文字、步骤按钮并管理可拖动弹窗的位置。</summary>
+    /// <summary>显示当前语言教程文字，语言切换只刷新文字，保留步骤和弹窗位置。</summary>
     public sealed class TutorialDialogView : MonoBehaviour
     {
         [Header("引用")]
@@ -27,6 +29,9 @@ namespace _Project.UI.Tutorial.View
 
         private Vector2 _defaultPosition;
         private bool _userPosition;
+        private TutorialStepData _currentStep;
+        private int _currentIndex;
+        private int _stepTotal;
 
         /// <summary>点击下一步时触发。</summary>
         public event Action NextPressed;
@@ -48,6 +53,7 @@ namespace _Project.UI.Tutorial.View
 
             _nextButton?.onClick.AddListener(HandleNextPressed);
             _closeButton?.onClick.AddListener(HandleClosePressed);
+            LocalizationSettings.SelectedLocaleChanged += RefreshLanguage;
             if (_dragHandle != null)
             {
                 _dragHandle.PositionChanged += HandlePositionChanged;
@@ -59,6 +65,7 @@ namespace _Project.UI.Tutorial.View
         {
             _nextButton?.onClick.RemoveListener(HandleNextPressed);
             _closeButton?.onClick.RemoveListener(HandleClosePressed);
+            LocalizationSettings.SelectedLocaleChanged -= RefreshLanguage;
             if (_dragHandle != null)
             {
                 _dragHandle.PositionChanged -= HandlePositionChanged;
@@ -76,22 +83,10 @@ namespace _Project.UI.Tutorial.View
                 return;
             }
 
-            if (_title != null)
-            {
-                _title.text = step.Title;
-            }
-            if (_description != null)
-            {
-                _description.text = step.Description;
-            }
-            if (_stepCounter != null)
-            {
-                _stepCounter.text = $"{index + 1} / {Mathf.Max(1, total)}";
-            }
-            if (_nextLabel != null)
-            {
-                _nextLabel.text = index + 1 >= total ? "退出" : "下一步";
-            }
+            _currentStep = step;
+            _currentIndex = index;
+            _stepTotal = total;
+            RefreshLanguage(LocalizationSettings.SelectedLocale);
             if (_nextButton != null)
             {
                 _nextButton.interactable = step.AdvanceMode == TutorialAdvanceMode.NextButton;
@@ -100,6 +95,32 @@ namespace _Project.UI.Tutorial.View
             if (_panelAnimation != null)
             {
                 _panelAnimation.Show();
+            }
+        }
+
+        /// <summary>刷新当前步骤译文，不推进教程、不重播显示动画。</summary>
+        private void RefreshLanguage(Locale _)
+        {
+            if (_currentStep == null)
+            {
+                return;
+            }
+
+            if (_title != null)
+            {
+                _title.text = _currentStep.Title;
+            }
+            if (_description != null)
+            {
+                _description.text = _currentStep.Description;
+            }
+            if (_stepCounter != null)
+            {
+                _stepCounter.text = $"{_currentIndex + 1} / {Mathf.Max(1, _stepTotal)}";
+            }
+            if (_nextLabel != null)
+            {
+                _nextLabel.text = L10n.Get(_currentIndex + 1 >= _stepTotal ? "ui.quit" : "ui.next");
             }
         }
 

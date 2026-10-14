@@ -43,10 +43,11 @@ public class ItemShapeSet : ScriptableObject
             new PointSet { Shape = ItemShape.TShape2,      Points = GridUtilities.ShapeFactory.TShape2() },
             new PointSet { Shape = ItemShape.Plus3,        Points = GridUtilities.ShapeFactory.Plus3() },
             new PointSet { Shape = ItemShape.Plus5,        Points = GridUtilities.ShapeFactory.Plus5() },
+            new PointSet { Shape = ItemShape.StarCluster,  Points = GridUtilities.ShapeFactory.StarCluster() },
         };
     }
 
-    /// <summary>按形状枚举查询点集;未配置/未知形状回退 Single(1×1),保证放置逻辑不崩溃。</summary>
+    /// <summary>按形状查询点集；自定义库未配置星群时使用标准十七格，未知形状回退单格。</summary>
     public IReadOnlyList<Vector2Int> GetPoints(ItemShape shape)
     {
         if (shapes != null)
@@ -58,6 +59,8 @@ public class ItemShapeSet : ScriptableObject
             }
         }
 
-        return GridUtilities.ShapeFactory.Single();
+        return shape == ItemShape.StarCluster
+            ? GridUtilities.ShapeFactory.StarCluster()
+            : GridUtilities.ShapeFactory.Single();
     }
 }

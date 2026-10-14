@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using _Project.UI.Animations;
+using CombatSystem;
 using GameSystem;
 using Services;
 using TMPro;
@@ -11,10 +12,8 @@ using VContainer;
 
 namespace _Project.UI.Settings
 {
-    /// <summary>
-    /// 设置面板：处理音频、窗口显示、帧率和现有输入动作重绑定。
-    /// </summary>
-    public class OptionsPanel : MonoBehaviour
+    /// <summary>设置面板：管理语言、音频、显示、攻击模式、场景返回和输入重绑定。</summary>
+    public partial class OptionsPanel : MonoBehaviour
     {
         private static readonly int[] FrameRateOptions = { -1, 30, 60, 120, 144 };
 
@@ -35,15 +34,22 @@ namespace _Project.UI.Settings
         [SerializeField] private Toggle _vSyncToggle;
         [SerializeField] private Toggle _combatRangeVisualsToggle;
         [SerializeField] private Button _frameRateButton;
+        [SerializeField] private Button _resetBindingsButton;
+
+        [Header("攻击模式")]
+        [SerializeField] private ToggleGroup _attackModeToggleGroup;
+        [SerializeField] private Toggle _attackModeAutomaticToggle;
+        [SerializeField] private Toggle _attackModeKeyToggle;
+        [SerializeField] private Toggle _attackModeMouseToggle;
 
         [Inject] private OptionsService optionsService;
         private IInputService _inputService;
 
         private CanvasGroup _panelGroup;
-        private readonly Dictionary<(InputBindingAction action, InputBindingSlot slot), Button> _bindingButtons = new();
-        private readonly Dictionary<(InputBindingAction action, InputBindingSlot slot), UnityAction> _bindingListeners = new();
+        private readonly Dictionary<InputBindingAction, Button> _bindingButtons = new();
+        private readonly Dictionary<InputBindingAction, UnityAction> _bindingListeners = new();
         private bool _isRebinding;
-        private (InputBindingAction action, InputBindingSlot slot) _activeBinding;
+        private InputBindingAction _activeBinding;
 
         private void Awake()
         {
@@ -58,6 +64,12 @@ namespace _Project.UI.Settings
             _vSyncToggle ??= FindComponent<Toggle>("VSync");
             _combatRangeVisualsToggle ??= FindComponent<Toggle>("CombatRangeVisuals");
             _frameRateButton ??= FindComponent<Button>("FrameRate");
+            _resetBindingsButton ??= FindComponent<Button>("ResetBindings");
+            _attackModeToggleGroup ??= FindComponent<ToggleGroup>("AttackModeOptions");
+            _attackModeAutomaticToggle ??= FindComponent<Toggle>("AttackModeAutomatic");
+            _attackModeKeyToggle ??= FindComponent<Toggle>("AttackModeKey");
+            _attackModeMouseToggle ??= FindComponent<Toggle>("AttackModeMouse");
+            _attackModeMarkedTargetToggle ??= FindComponent<Toggle>("AttackModeMarkedTarget");
         }
 
         private void Start()
@@ -68,12 +80,15 @@ namespace _Project.UI.Settings
             if (_returnBaseButton != null)
             {
                 _returnBaseButton.onClick.AddListener(ReturnToBase);
-                bool inBattle = SceneManager.GetSceneByName("GameScene").isLoaded;
+                bool inBattle = _sceneLoader != null &&
+                    SceneManager.GetSceneByName(_sceneLoader.gameScene).isLoaded;
                 _returnBaseButton.gameObject.SetActive(inBattle);
             }
 
             BindSettingsControls();
+            BindLanguage();
             BindInputControls();
+            _resetBindingsButton?.onClick.AddListener(ResetBindings);
         }
 
         [Inject]
@@ -153,6 +168,70 @@ namespace _Project.UI.Settings
                 _frameRateButton.onClick.AddListener(AdvanceFrameRate);
                 RefreshFrameRateLabel();
             }
+
+            BindAttackModeControls(settings.attackMode);
+        }
+
+        /// <summary>按存档初始化互斥攻击模式 Toggle。</summary>
+        private void BindAttackModeControls(TransmitterAttackMode selectedMode)
+        {
+            if (_attackModeToggleGroup != null)
+            {
+                _attackModeToggleGroup.allowSwitchOff = false;
+            }
+
+            BindAttackModeToggle(
+                _attackModeAutomaticToggle, selectedMode,
+                TransmitterAttackMode.Automatic, OnAutoAttackChanged);
+            BindAttackModeToggle(
+                _attackModeKeyToggle, selectedMode,
+                TransmitterAttackMode.Key, OnKeyAttackChanged);
+            BindAttackModeToggle(
+                _attackModeMouseToggle, selectedMode,
+                TransmitterAttackMode.Mouse, OnMouseAttackChanged);
+            BindAttackModeToggle(
+                _attackModeMarkedTargetToggle, selectedMode,
+                TransmitterAttackMode.MarkedTarget, OnMarkedTargetAttackChanged);
+        }
+
+        /// <summary>设置单个攻击模式 Toggle 并绑定选择事件。</summary>
+        private static void BindAttackModeToggle(
+            Toggle toggle,
+            TransmitterAttackMode selectedMode,
+            TransmitterAttackMode mode,
+            UnityAction<bool> listener)
+        {
+            if (toggle == null)
+            {
+                return;
+            }
+
+            toggle.SetIsOnWithoutNotify(selectedMode == mode);
+            toggle.onValueChanged.AddListener(listener);
+        }
+
+        private void OnAutoAttackChanged(bool selected)
+        {
+            if (selected)
+            {
+                optionsService?.SetAttackMode(TransmitterAttackMode.Automatic);
+            }
+        }
+
+        private void OnKeyAttackChanged(bool selected)
+        {
+            if (selected)
+            {
+                optionsService?.SetAttackMode(TransmitterAttackMode.Key);
+            }
+        }
+
+        private void OnMouseAttackChanged(bool selected)
+        {
+            if (selected)
+            {
+                optionsService?.SetAttackMode(TransmitterAttackMode.Mouse);
+            }
         }
 
         private void BindInputControls()
@@ -165,29 +244,23 @@ namespace _Project.UI.Settings
             IReadOnlyList<InputBindingAction> actions = _inputService.BindingActions;
             for (int i = 0; i < actions.Count; i++)
             {
-                InputBindingAction action = actions[i];
-                BindInputControl(action, InputBindingSlot.Primary);
-                if (IsMoveAction(action))
-                {
-                    BindInputControl(action, InputBindingSlot.Secondary);
-                }
+                BindInputControl(actions[i]);
             }
         }
 
-        private void BindInputControl(InputBindingAction action, InputBindingSlot slot)
+        private void BindInputControl(InputBindingAction action)
         {
-            Button button = FindComponent<Button>($"Binding_{action}_{slot}");
+            Button button = FindComponent<Button>($"Binding_{action}_Primary");
             if (button == null)
             {
                 return;
             }
 
-            UnityAction listener = () => BeginRebind(action, slot);
-            (InputBindingAction action, InputBindingSlot slot) key = (action, slot);
-            _bindingButtons[key] = button;
-            _bindingListeners[key] = listener;
+            UnityAction listener = () => BeginRebind(action);
+            _bindingButtons[action] = button;
+            _bindingListeners[action] = listener;
             button.onClick.AddListener(listener);
-            RefreshBindingLabel(action, slot);
+            RefreshBindingLabel(action);
         }
 
         private void HandleFullscreenChanged(bool enabled)
@@ -218,8 +291,8 @@ namespace _Project.UI.Settings
 
             SettingsData settings = optionsService.Current;
             string text = settings.frameRateLimitEnabled
-                ? $"帧率上限：{settings.frameRateLimit} FPS"
-                : "帧率上限：不限制";
+                ? L10n.Get("settings.frameRate", settings.frameRateLimit)
+                : L10n.Get("settings.uncapped");
             TMP_Text label = _frameRateButton.GetComponentInChildren<TMP_Text>(true);
             if (label != null)
             {
@@ -245,51 +318,58 @@ namespace _Project.UI.Settings
             return 2;
         }
 
-        private void BeginRebind(InputBindingAction action, InputBindingSlot slot)
+        private void BeginRebind(InputBindingAction action)
         {
-            (InputBindingAction action, InputBindingSlot slot) key = (action, slot);
-            if (_inputService == null || !_bindingButtons.TryGetValue(key, out Button button))
+            if (_inputService == null || !_bindingButtons.TryGetValue(action, out Button button))
             {
                 return;
             }
 
-            _activeBinding = key;
+            _activeBinding = action;
             _isRebinding = true;
-            SetBindingLabel(button, "请按下按键...");
+            SetBindingLabel(button, L10n.Get("settings.pressKey"));
             _inputService.Rebind(
                 action,
-                slot,
                 () => _isRebinding = true,
-                () => FinishRebind(action, slot),
-                () => FinishRebind(action, slot));
+                () => FinishRebind(action),
+                () => FinishRebind(action));
         }
 
-        private void FinishRebind(InputBindingAction action, InputBindingSlot slot)
+        private void FinishRebind(InputBindingAction action)
         {
-            RefreshBindingLabel(action, slot);
-            if (IsActiveBinding(action, slot))
+            RefreshBindingLabel(action);
+            if (IsActiveBinding(action))
             {
                 _isRebinding = false;
             }
         }
 
-        private void RefreshBindingLabel(InputBindingAction action, InputBindingSlot slot)
+        private void RefreshBindingLabel(InputBindingAction action)
         {
-            (InputBindingAction action, InputBindingSlot slot) key = (action, slot);
-            if (!_bindingButtons.TryGetValue(key, out Button button) || _inputService == null)
+            if (!_bindingButtons.TryGetValue(action, out Button button) || _inputService == null)
             {
                 return;
             }
 
-            SetBindingLabel(button, _inputService.GetBindingDisplayString(action, slot));
+            SetBindingLabel(button, _inputService.GetBindingDisplayString(action));
         }
 
-        private static bool IsMoveAction(InputBindingAction action)
+        /// <summary>恢复所有可重绑动作的默认键位并刷新显示。</summary>
+        private void ResetBindings()
         {
-            return action == InputBindingAction.MoveUp
-                || action == InputBindingAction.MoveDown
-                || action == InputBindingAction.MoveLeft
-                || action == InputBindingAction.MoveRight;
+            if (_inputService == null)
+            {
+                return;
+            }
+
+            CancelActiveRebind();
+            _inputService.ResetBindings();
+
+            IReadOnlyList<InputBindingAction> actions = _inputService.BindingActions;
+            for (int i = 0; i < actions.Count; i++)
+            {
+                RefreshBindingLabel(actions[i]);
+            }
         }
 
         private static void SetBindingLabel(Button button, string text)
@@ -369,10 +449,12 @@ namespace _Project.UI.Settings
 
         private void OnDestroy()
         {
+            UnbindLanguage();
             CancelActiveRebind();
             _openButton?.onClick.RemoveListener(Toggle);
             _closeButton?.onClick.RemoveListener(Hide);
             _returnBaseButton?.onClick.RemoveListener(ReturnToBase);
+            _resetBindingsButton?.onClick.RemoveListener(ResetBindings);
             if (optionsService != null)
             {
                 _masterVolumeSlider?.onValueChanged.RemoveListener(optionsService.SetMasterVolume);
@@ -385,8 +467,12 @@ namespace _Project.UI.Settings
 
             _fullscreenToggle?.onValueChanged.RemoveListener(HandleFullscreenChanged);
             _frameRateButton?.onClick.RemoveListener(AdvanceFrameRate);
+            _attackModeAutomaticToggle?.onValueChanged.RemoveListener(OnAutoAttackChanged);
+            _attackModeKeyToggle?.onValueChanged.RemoveListener(OnKeyAttackChanged);
+            _attackModeMouseToggle?.onValueChanged.RemoveListener(OnMouseAttackChanged);
+            _attackModeMarkedTargetToggle?.onValueChanged.RemoveListener(OnMarkedTargetAttackChanged);
 
-            foreach (KeyValuePair<(InputBindingAction action, InputBindingSlot slot), Button> pair in _bindingButtons)
+            foreach (KeyValuePair<InputBindingAction, Button> pair in _bindingButtons)
             {
                 pair.Value.onClick.RemoveListener(_bindingListeners[pair.Key]);
             }
@@ -395,18 +481,18 @@ namespace _Project.UI.Settings
         private void CancelActiveRebind()
         {
             bool wasRebinding = _isRebinding;
-            (InputBindingAction action, InputBindingSlot slot) binding = _activeBinding;
+            InputBindingAction binding = _activeBinding;
             _inputService?.CancelRebind();
             _isRebinding = false;
             if (wasRebinding)
             {
-                RefreshBindingLabel(binding.action, binding.slot);
+                RefreshBindingLabel(binding);
             }
         }
 
-        private bool IsActiveBinding(InputBindingAction action, InputBindingSlot slot)
+        private bool IsActiveBinding(InputBindingAction action)
         {
-            return _activeBinding.action == action && _activeBinding.slot == slot;
+            return _activeBinding == action;
         }
     }
 }

@@ -15,7 +15,7 @@ namespace EnemySystem
     /// <summary>
     /// 敌人实体宿主和组合根。
     /// <para>宿主保存身份、静态配置、生命周期事件，并把生命、表现和空间行为委托给组件。</para>
-    /// <para>EnemyFlockBridge 是实体运行所需的桥接组件，由 RequireComponent 明确声明；Buff 状态由场景级 BuffManner 统一管理。</para>
+    /// <para>EnemyFlockBridge 是实体运行所需的桥接组件，由 RequireComponent 明确声明；Buff 状态由场景级 BuffService 统一管理。</para>
     /// </summary>
     [ExecuteAlways]
     [DisallowMultipleComponent]
@@ -24,6 +24,8 @@ namespace EnemySystem
     [RequireComponent(typeof(EnemyDamagePresentationComponent))]
     public class Enemy : MonoBehaviour, ILockable, ICombatTarget, IHealable, IControlResistant, IBuffTarget, IBuffReceiver, IDamageRequestReceiver, IEnemyMotionEffectTarget, IPermanentEnemyMotionEffectTarget, IPooledObject
     {
+        private const float LockAnchorPadding = 0.15f;
+
         [FormerlySerializedAs("stats")]
         [FormerlySerializedAs("attributes")]
         [Header("实体配置")]
@@ -33,24 +35,20 @@ namespace EnemySystem
         [Header("调试")]
         [SerializeField] private bool showDebugInfo;
 
-        // 这些字段仅保留给现有编辑器测试和调试读取，真实表现状态由 EnemyDamagePresentationComponent 持有。
-        private float _damageFlashTimer;
-        private Color _activeFlashColor;
-
         private bool _isDead;
         private EnemyHealthComponent _healthComponent;
         private EnemyFlockBridge _flockBridge;
         private EnemyDamagePresentationComponent _damagePresentationComponent;
+        private EnemyBuffMotionEffects _buffMotionEffects;
+        private EnemyActivationNotifier _activationNotifier;
         private Collider _enemyCollider;
-        private EnemyShieldComponent _shieldComponent;
-        private bool _shieldLookupComplete;
+        private Renderer[] _lockAnchorRenderers;
+        private EnemySpawnCategory _spawnCategory = EnemySpawnCategory.Normal;
 
         [Inject] private IBuffService _buffService;
         [Inject] private SpatialQueryService _spatialService;
         [Inject] private EnemyFlockSettingsSO _flockSettings;
 
-        // 仅供编辑器旧测试在没有容器注入时使用；正式运行时始终由 GameLoop BuffManner 提供服务。
-        private static readonly BuffManner EditorFallbackBuffManner = new();
         /// <summary>查询服务槽位；不参与 Flock slot 的分配和回收。</summary>
         internal int SpatialSlot { get; private set; } = -1;
 
@@ -61,6 +59,9 @@ namespace EnemySystem
         public EnemyType EnemyType => enemyAttributes != null
             ? enemyAttributes.enemyType
             : EnemyType.Normal;
+
+        /// <summary>本次生成实例所属分类。</summary>
+        internal EnemySpawnCategory SpawnCategory => _spawnCategory;
 
         /// <summary>本次死亡的原因。</summary>
         public EnemyDeathCause DeathCause { get; private set; } = EnemyDeathCause.None;
@@ -87,17 +88,8 @@ namespace EnemySystem
         public float SpeedMultiplier { get; set; } = 1f;
 
         /// <summary>生成倍率与当前移动速度 Buff 合成后的有效倍率。</summary>
-        internal float GetMovementSpeedMultiplier()
-        {
-            IBuffService buffService = GetBuffService();
-            float buffMultiplier = buffService != null
-                ? buffService.GetModifierMultiplier(
-                    this,
-                    BuffModifierType.MovementSpeedMultiplier)
-                : 1f;
-
-            return Mathf.Max(0f, SpeedMultiplier) * Mathf.Max(0f, buffMultiplier);
-        }
+        internal float GetMovementSpeedMultiplier() =>
+            GetBuffMotionEffects().GetMovementSpeedMultiplier();
 
         /// <summary>创建该实体的源预制体。</summary>
         public GameObject SourcePrefab { get; set; }
@@ -147,7 +139,7 @@ namespace EnemySystem
         protected virtual void Start()
         {
             // 覆盖容器注入晚于 OnEnable 的情况，确保首次施加 Buff 前已有中心目标句柄。
-            RegisterBuffTarget();
+            GetBuffMotionEffects().RegisterTarget();
             if (MaxHealth <= 0f && enemyAttributes != null)
             {
                 InitializeForSpawn(1f, 1f);
@@ -158,39 +150,19 @@ namespace EnemySystem
         protected virtual void OnEnable()
         {
             CacheRequiredComponents();
-            ResetShieldCache();
+            GetBuffMotionEffects().ResetControlResistanceCache();
             _damagePresentationComponent?.EnsureSubscribed();
-            RegisterBuffTarget();
-            RegisterSpatial();
+            GetBuffMotionEffects().RegisterTarget();
+            GetBuffMotionEffects().RegisterSpatial();
             NotifyActivationReady();
         }
 
-        /// <summary>禁用时注销 Buff 目标并立即失效空间槽位。</summary>
+        /// <summary>池化或停用时释放 ECS 代理并注销 Buff 与空间目标。</summary>
         protected virtual void OnDisable()
         {
-            // 任何非死亡路径的禁用也必须释放 ECS 实体，避免留下无效 SpatialSlot 绑定。
             _flockBridge?.Runtime?.ReleaseAgent(_flockBridge);
-            UnregisterBuffTarget();
-            UnregisterSpatial();
-        }
-
-        /// <summary>配置与注入就绪后登记宿主，位置由查询服务批量采样。</summary>
-        private void RegisterSpatial()
-        {
-            if (SpatialSlot < 0 && isActiveAndEnabled && HasConfiguration && !_isDead && _spatialService != null)
-            {
-                SpatialSlot = _spatialService.RegisterEnemy(this);
-                _flockBridge?.SyncSpatialSlot(SpatialSlot);
-            }
-        }
-
-        /// <summary>回收、禁用和死亡共用的幂等注销入口。</summary>
-        private void UnregisterSpatial()
-        {
-            int previousSlot = SpatialSlot;
-            SpatialSlot = -1;
-            _flockBridge?.SyncSpatialSlot(-1);
-            _spatialService?.UnregisterEnemy(previousSlot);
+            GetBuffMotionEffects().UnregisterTarget();
+            GetBuffMotionEffects().UnregisterSpatial();
         }
 
         /// <summary>在选中实体时绘制调试范围。</summary>
@@ -205,10 +177,14 @@ namespace EnemySystem
             Gizmos.DrawWireSphere(transform.position, 1f);
         }
 
-        /// <summary>初始化本次生成的生命和速度参数。</summary>
+        /// <summary>初始化本次生成的属性、分类和速度状态。</summary>
         /// <param name="healthMultiplier">生命倍率。</param>
         /// <param name="speedMultiplier">速度倍率。</param>
-        public virtual void InitializeForSpawn(float healthMultiplier, float speedMultiplier)
+        /// <param name="spawnCategory">本次生成分类。</param>
+        public virtual void InitializeForSpawn(
+            float healthMultiplier,
+            float speedMultiplier,
+            EnemySpawnCategory spawnCategory = EnemySpawnCategory.Normal)
         {
             if (enemyAttributes == null)
             {
@@ -217,10 +193,11 @@ namespace EnemySystem
             }
 
             CacheRequiredComponents();
+            _spawnCategory = spawnCategory;
             _healthComponent?.InitializeForSpawn(healthMultiplier);
             SpeedMultiplier = speedMultiplier;
-            SyncMovementSpeed();
-            RegisterSpatial();
+            GetBuffMotionEffects().SyncMovementSpeed();
+            GetBuffMotionEffects().RegisterSpatial();
             NotifyActivationReady();
         }
 
@@ -264,86 +241,51 @@ namespace EnemySystem
         }
 
         /// <summary>直接请求完整死亡流程，不经过伤害拦截器。</summary>
-        public void Kill()
-        {
-            DieFromHealth(EnemyDeathCause.Forced);
-        }
+        public void Kill() => DieFromHealth(EnemyDeathCause.Forced);
 
         /// <summary>以吞噬原因结束敌人生命，不产生奖励。</summary>
-        public void KillAsConsumed()
-        {
-            DieFromHealth(EnemyDeathCause.Consumed);
-        }
+        public void KillAsConsumed() => DieFromHealth(EnemyDeathCause.Consumed);
 
         /// <summary>对象池租借时清除实体上一次租借的状态。</summary>
-        public void OnRentFromPool()
-        {
-            ResetForReuse();
-        }
+        public void OnRentFromPool() => ResetForReuse();
 
         /// <summary>对象池归还时清除实体状态。</summary>
-        public void OnReturnToPool()
-        {
-            ResetForReuse();
-        }
+        public void OnReturnToPool() => ResetForReuse();
 
         /// <summary>将实体重置为可重新初始化的状态。</summary>
         public virtual void ResetForReuse()
         {
-            UnregisterSpatial();
+            GetBuffMotionEffects().UnregisterSpatial();
             CacheRequiredComponents();
             // 死亡路径会刻意保持源 Renderer 隐藏；新一轮租借前恢复可见，等待 ECS 重新接管。
             _flockBridge?.SetEcsPresentationEnabled(false);
             _isDead = false;
             DeathCause = EnemyDeathCause.None;
-            ResetShieldCache();
+            _spawnCategory = EnemySpawnCategory.Normal;
+            GetBuffMotionEffects().ResetControlResistanceCache();
             if (_enemyCollider != null)
             {
                 _enemyCollider.enabled = true;
             }
 
-            IBuffService buffService = GetBuffService();
-            buffService?.ClearAllBuffs(this);
-            buffService?.ClearAllPermanentMovementSpeedMultipliers(this);
-            UnregisterBuffTarget();
+            GetBuffMotionEffects().ResetForReuse();
             _healthComponent?.ResetForReuse();
             SpeedMultiplier = 1f;
-            SyncMovementSpeed();
+            GetBuffMotionEffects().SyncMovementSpeed();
             ClearDamagePresentationState();
             ReuseRequested?.Invoke();
         }
 
         /// <summary>返回当前承伤 Buff 倍率；该修正独立于伤害抗性。</summary>
         /// <returns>当前伤害倍率。</returns>
-        internal float GetDamageTakenMultiplier()
-        {
-            IBuffService buffService = GetBuffService();
-            if (buffService == null)
-            {
-                return 1f;
-            }
-
-            return buffService.GetModifierMultiplier(
-                this,
-                BuffModifierType.DamageTakenMultiplier);
-        }
-
+        internal float GetDamageTakenMultiplier() =>
+            GetBuffMotionEffects().GetDamageTakenMultiplier();
         /// <summary>返回攻击 Buff 合成后的敌方输出伤害倍率。</summary>
-        internal float GetAttackDamageMultiplier()
-        {
-            return GetBuffService()?.GetModifierMultiplier(
-                this,
-                BuffModifierType.AttackDamage) ?? 1f;
-        }
-
+        internal float GetAttackDamageMultiplier() =>
+            GetBuffMotionEffects().GetAttackDamageMultiplier();
         /// <summary>返回限制敌方发起新攻击的状态倍率。</summary>
-        internal float GetAttackAllowedMultiplier()
-        {
-            return GetBuffService()?.GetModifierMultiplier(
-                this,
-                BuffModifierType.AttackAvailability) ?? 1f;
-        }
-
+        internal float GetAttackAllowedMultiplier() =>
+            GetBuffMotionEffects().GetAttackAllowedMultiplier();
         /// <summary>通知表现组件和兼容子类已经实际扣除生命。</summary>
         /// <param name="damageAmount">实际扣除的伤害量。</param>
         internal void NotifyDamageTaken(float damageAmount)
@@ -352,7 +294,7 @@ namespace EnemySystem
             OnDamageTaken(damageAmount);
         }
 
-        /// <summary>结束敌人的战斗生命周期，并保留 ECS 实体供死亡材质播放。</summary>
+        /// <summary>捕获死亡攻击倍率、结束战斗生命周期并保留 ECS 死亡表现。</summary>
         internal void DieFromHealth(EnemyDeathCause cause = EnemyDeathCause.Damage)
         {
             if (_isDead)
@@ -360,13 +302,14 @@ namespace EnemySystem
                 return;
             }
 
-            _healthComponent?.SetHealthToZero();
+            float deathAttackDamageMultiplier = GetAttackDamageMultiplier();
+            _healthComponent?.SetHealthToZero(deathAttackDamageMultiplier);
             DeathCause = cause;
             _isDead = true;
             // 死亡实体不再参与任何 Buff 调度，连同永久运动效果一起注销。
-            UnregisterBuffTarget();
+            GetBuffMotionEffects().UnregisterTarget();
             // ECS 实体必须保留到 EnemySpawner 回收，才能完成溶解进度。
-            UnregisterSpatial();
+            GetBuffMotionEffects().UnregisterSpatial();
             DeathStarted?.Invoke(this);
 
             if (_enemyCollider != null)
@@ -378,24 +321,22 @@ namespace EnemySystem
             OnDied?.Invoke(this);
         }
 
-        /// <summary>同步旧编辑器测试读取的表现状态镜像。</summary>
+        /// <summary>兼容集中视觉系统调用；表现状态不再缓存在敌人宿主。</summary>
         /// <param name="color">当前表现颜色。</param>
         /// <param name="timer">当前表现剩余时间。</param>
-        internal void SetDamagePresentationState(Color color, float timer)
-        {
-            _activeFlashColor = color;
-            _damageFlashTimer = timer;
-        }
+        internal void SetDamagePresentationState(Color color, float timer) { }
 
-        /// <summary>清除旧编辑器测试读取的表现状态镜像。</summary>
-        internal void ClearDamagePresentationState()
-        {
-            _damageFlashTimer = 0f;
-        }
+        /// <summary>兼容集中视觉系统重置调用；敌人宿主不保存表现镜像。</summary>
+        internal void ClearDamagePresentationState() { }
 
         /// <summary>缓存实体运行所需组件，仅为临时对象补齐物理碰撞体。</summary>
         private void CacheRequiredComponents()
         {
+            if (_lockAnchorRenderers == null)
+            {
+                _lockAnchorRenderers = GetComponentsInChildren<Renderer>(true);
+            }
+
             if (_enemyCollider == null && !TryGetComponent(out _enemyCollider))
             {
                 _enemyCollider = gameObject.AddComponent<BoxCollider>();
@@ -417,48 +358,23 @@ namespace EnemySystem
             }
         }
 
-        /// <summary>把生成倍率和 Buff 倍率提交给当前 ECS 运动代理。</summary>
-        private void SyncMovementSpeed()
-        {
-            _flockBridge?.SetSpeedMultiplier(GetMovementSpeedMultiplier());
-        }
+        /// <summary>取得敌人的 Buff 与移动效果协作者。</summary>
+        private EnemyBuffMotionEffects GetBuffMotionEffects() =>
+            _buffMotionEffects ??= new EnemyBuffMotionEffects(
+                this,
+                () => _buffService,
+                () => _flockBridge,
+                () => SpeedMultiplier,
+                () => _spatialService,
+                slot => SpatialSlot = slot,
+                CacheRequiredComponents);
 
-        /// <summary>向中心 BuffManner 登记当前目标。</summary>
-        private void RegisterBuffTarget()
-        {
-            GetBuffService()?.RegisterTarget(this);
-        }
-
-        /// <summary>从中心 BuffManner 注销当前目标。</summary>
-        private void UnregisterBuffTarget()
-        {
-            GetBuffService()?.UnregisterTarget(this);
-        }
-
-        /// <summary>取得容器提供的场景 Buff 服务，编辑器旧测试使用共享回退实例。</summary>
-        private IBuffService GetBuffService()
-        {
-            if (_buffService != null)
-            {
-                return _buffService;
-            }
-
-            return !Application.isPlaying ? EditorFallbackBuffManner : null;
-        }
-
-        /// <summary>通知所有已挂载机制完成一次宿主激活初始化。</summary>
+        /// <summary>通知缓存的已挂载机制完成一次宿主激活初始化。</summary>
         private void NotifyActivationReady()
         {
-            RegisterBuffTarget();
-            MonoBehaviour[] components = GetComponents<MonoBehaviour>();
-            for (int index = 0; index < components.Length; index++)
-            {
-                if (components[index] is IEnemyActivationListener listener)
-                {
-                    listener.OnEnemyActivationReady();
-                }
-            }
-
+            GetBuffMotionEffects().RegisterTarget();
+            _activationNotifier ??= new EnemyActivationNotifier(gameObject);
+            _activationNotifier.Notify();
             ActivationReady?.Invoke();
         }
 
@@ -474,129 +390,120 @@ namespace EnemySystem
         }
 
         #region IDamageable
-
         Vector3 IDamageable.Position => transform.position;
         bool IDamageable.IsAlive => !_isDead && gameObject.activeInHierarchy;
         Transform IDamageable.Transform => transform;
-
         CombatTargetKind ICombatTarget.TargetKind => CombatTargetKind.Enemy;
-
         float IHealable.Heal(float amount)
         {
             CacheRequiredComponents();
             return _healthComponent != null ? _healthComponent.Heal(amount) : 0f;
         }
-
         bool IControlResistant.CanReceiveHarmfulEffects
-        {
-            get
-            {
-                if (!_shieldLookupComplete)
-                {
-                    TryGetComponent(out _shieldComponent);
-                    _shieldLookupComplete = true;
-                }
-
-                return _shieldComponent == null || !_shieldComponent.IsShieldActive;
-            }
-        }
+            => GetBuffMotionEffects().CanReceiveHarmfulEffects;
 
         #endregion
-
         #region ILockable
-
-        float ILockable.ThreatLevel
-        {
-            get
-            {
-                float baseThreat = EnemyType switch
-                {
-                    EnemyType.Tank => 60f,
-                    EnemyType.Fast => 40f,
-                    _ => 30f
-                };
-                float healthFactor = MaxHealth > 0f ? CurrentHealth / MaxHealth : 1f;
-                return Mathf.Clamp(baseThreat * (0.5f + 0.5f * healthFactor), 0f, 100f);
-            }
-        }
+        float ILockable.ThreatLevel => Mathf.Clamp(
+            (_spawnCategory == EnemySpawnCategory.Boss
+                ? enemyAttributes.bossThreatLevel
+                : EnemyType switch { EnemyType.Tank => 60f, EnemyType.Fast => 40f, _ => 30f }) *
+            (0.5f + 0.5f * (MaxHealth > 0f ? CurrentHealth / MaxHealth : 1f)),
+            0f,
+            100f);
 
         bool ILockable.IsLockable => !_isDead && gameObject.activeInHierarchy;
-        Vector3 ILockable.LockAnchorPoint => transform.position + Vector3.up * 2f;
-        TargetCategory ILockable.Category => EnemyType == EnemyType.Tank
+        Vector3 ILockable.LockAnchorPoint => GetLockAnchorPoint();
+        TargetCategory ILockable.Category => _spawnCategory == EnemySpawnCategory.Boss
             ? TargetCategory.Boss
             : TargetCategory.Normal;
         float ILockable.HealthPercent => HealthPercent;
 
+        /// <summary>将锁定锚点放在可见模型边界沿局部上方向的顶部。</summary>
+        private Vector3 GetLockAnchorPoint()
+        {
+            Bounds bounds = GetRenderBounds();
+            Vector3 up = transform.up;
+            Vector3 extents = bounds.extents;
+            float projectedExtent =
+                Mathf.Abs(up.x) * extents.x +
+                Mathf.Abs(up.y) * extents.y +
+                Mathf.Abs(up.z) * extents.z;
+
+            return bounds.center + up * (projectedExtent + LockAnchorPadding);
+        }
+
+        /// <summary>组合模型 Renderer 的世界边界，无模型时回退到实体碰撞体。</summary>
+        private Bounds GetRenderBounds()
+        {
+            bool hasBounds = false;
+            Bounds bounds = default;
+            for (int index = 0; index < _lockAnchorRenderers.Length; index++)
+            {
+                Renderer renderer = _lockAnchorRenderers[index];
+                if (renderer == null || !renderer.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                if (!hasBounds)
+                {
+                    bounds = renderer.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(renderer.bounds);
+                }
+            }
+
+            if (hasBounds)
+            {
+                return bounds;
+            }
+
+            return _enemyCollider != null
+                ? _enemyCollider.bounds
+                : new Bounds(transform.position, Vector3.zero);
+        }
+
         #endregion
-
         #region IEnemyMotionEffectTarget
-
         /// <summary>向 ECS 代理提交速度倍率，不暴露 ECS Entity。</summary>
         void IEnemyMotionEffectTarget.SetMovementSpeedMultiplier(float multiplier)
         {
             CacheRequiredComponents();
-            _flockBridge?.SetSpeedMultiplier(Mathf.Max(0f, multiplier));
+            GetBuffMotionEffects().SetMovementSpeedMultiplier(multiplier);
         }
 
         /// <summary>向 ECS 代理提交击退冲量；未绑定 ECS 时直接移动托管对象。</summary>
         void IEnemyMotionEffectTarget.AddExternalImpulse(Vector3 impulse)
         {
-            if (impulse.sqrMagnitude <= 0f)
-            {
-                return;
-            }
-
-            CacheRequiredComponents();
-            if (_flockBridge != null && _flockBridge.IsEcsControlled)
-            {
-                _flockBridge.AddExternalImpulse(impulse);
-                return;
-            }
-
-            transform.position += impulse;
+            GetBuffMotionEffects().AddExternalImpulse(impulse);
         }
 
         /// <summary>保存指定来源的永久速度倍率，并立即同步 ECS 运动代理。</summary>
         void IPermanentEnemyMotionEffectTarget.SetPermanentMovementSpeedMultiplier(
             float multiplier,
-            int sourceInstanceId)
-        {
-            GetBuffService()?.SetPermanentMovementSpeedMultiplier(
-                this,
-                multiplier,
-                sourceInstanceId);
-        }
+            int sourceInstanceId) =>
+            GetBuffMotionEffects().SetPermanentMovementSpeedMultiplier(multiplier, sourceInstanceId);
 
         /// <summary>移除指定来源的永久速度倍率，并恢复剩余状态合成结果。</summary>
-        void IPermanentEnemyMotionEffectTarget.ClearPermanentMovementSpeedMultiplier(int sourceInstanceId)
-        {
-            GetBuffService()?.ClearPermanentMovementSpeedMultiplier(this, sourceInstanceId);
-        }
+        void IPermanentEnemyMotionEffectTarget.ClearPermanentMovementSpeedMultiplier(int sourceInstanceId) =>
+            GetBuffMotionEffects().ClearPermanentMovementSpeedMultiplier(sourceInstanceId);
 
         #endregion
-
         #region IBuffReceiver
 
         /// <summary>以默认来源应用 Buff。</summary>
         /// <param name="definition">Buff 静态定义。</param>
-        public void ApplyBuff(BuffDefinitionSO definition)
-        {
-            ApplyBuff(definition, 0);
-        }
+        public void ApplyBuff(BuffDefinitionSO definition) => ApplyBuff(definition, 0);
 
         /// <summary>以指定来源应用 Buff。</summary>
         /// <param name="definition">Buff 静态定义。</param>
         /// <param name="sourceInstanceId">Buff 来源实例标识。</param>
-        public void ApplyBuff(BuffDefinitionSO definition, int sourceInstanceId)
-        {
-            if (definition == null)
-            {
-                return;
-            }
-
-            RegisterBuffTarget();
-            GetBuffService()?.ApplyBuff(this, definition, sourceInstanceId);
-        }
+        public void ApplyBuff(BuffDefinitionSO definition, int sourceInstanceId) =>
+            GetBuffMotionEffects().ApplyBuff(definition, sourceInstanceId);
 
         /// <summary>
         /// 仅在目标没有同类活动 Buff 时施加一个 Buff。
@@ -604,55 +511,30 @@ namespace EnemySystem
         /// <param name="definition">要施加的 Buff 静态定义。</param>
         /// <param name="sourceInstanceId">Buff 来源实例标识。</param>
         /// <returns>本次实际新增 Buff 时返回 true。</returns>
-        public bool TryApplyBuffIfAbsent(BuffDefinitionSO definition, int sourceInstanceId)
-        {
-            if (definition == null)
-            {
-                return false;
-            }
+        public bool TryApplyBuffIfAbsent(BuffDefinitionSO definition, int sourceInstanceId) =>
+            GetBuffMotionEffects().TryApplyBuffIfAbsent(definition, sourceInstanceId);
 
-            RegisterBuffTarget();
-            IBuffService buffService = GetBuffService();
-            return buffService != null &&
-                buffService.TryApplyBuffIfAbsent(this, definition, sourceInstanceId);
-        }
-
-        /// <summary>报告当前目标状态给场景级 BuffManner。</summary>
+        /// <summary>报告当前目标状态给场景级 BuffService。</summary>
         bool IBuffTarget.IsActive => isActiveAndEnabled && gameObject.activeInHierarchy;
         bool IBuffTarget.IsAlive => !_isDead && gameObject.activeInHierarchy;
         bool IBuffTarget.CanReceiveHarmfulEffects =>
             ((IControlResistant)this).CanReceiveHarmfulEffects;
 
         /// <summary>Buff 属性变化时同步需要主动提交的移动状态。</summary>
-        void IBuffTarget.OnBuffModifiersChanged(BuffModifierType modifierType)
-        {
-            if (modifierType == BuffModifierType.MovementSpeedMultiplier)
-            {
-                SyncMovementSpeed();
-            }
-        }
-
-        /// <summary>重置护盾组件缓存，使对象池复用时重新确认可选组件。</summary>
-        private void ResetShieldCache()
-        {
-            _shieldComponent = null;
-            _shieldLookupComplete = false;
-        }
+        void IBuffTarget.OnBuffModifiersChanged(BuffModifierType modifierType) =>
+            GetBuffMotionEffects().OnBuffModifiersChanged(modifierType);
 
         /// <summary>吸收另一个敌人的当前生命并结束对方生命。</summary>
         public bool TryAbsorb(Enemy target)
         {
-            if (target == null || target == this || _isDead || target.IsDead)
+            if (target == null || target == this || _isDead || target.IsDead ||
+                target.CurrentHealth <= 0f ||
+                target.SpawnCategory is not (EnemySpawnCategory.Normal or EnemySpawnCategory.Child))
             {
                 return false;
             }
 
             float absorbedHealth = target.CurrentHealth;
-            if (absorbedHealth <= 0f)
-            {
-                return false;
-            }
-
             target.KillAsConsumed();
             CacheRequiredComponents();
             _healthComponent?.AbsorbHealth(absorbedHealth);

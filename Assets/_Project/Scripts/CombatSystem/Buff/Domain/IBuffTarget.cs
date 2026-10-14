@@ -1,7 +1,7 @@
 namespace CombatSystem
 {
     /// <summary>
-    /// BuffManner 可登记的运行时目标。
+    /// BuffService 可登记的运行时目标。
     /// 目标只提供生命周期、抗性和属性变化通知，不保存任何 Buff 状态。
     /// </summary>
     public interface IBuffTarget

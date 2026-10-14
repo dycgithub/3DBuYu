@@ -2,18 +2,87 @@ using UnityEngine;
 
 namespace _Project.Tests.CombatPlayground.Model
 {
-    /// <summary>实验场景可手动触发的表现阶段。</summary>
-    public enum CombatPlaygroundStage
+    /// <summary>选择技能卡的真实释放流程或隔离动作执行流程。</summary>
+    public enum CombatPlaygroundSkillExecutionMode
     {
-        Charge,
-        BeforeFire,
-        AfterFire,
-        Hit,
-        Expired
+        FormalRelease,
+        DirectAction
+    }
+
+    /// <summary>表示发射器攻击是否被正式攻击链接受。</summary>
+    public enum CombatPlaygroundFireResult
+    {
+        Accepted,
+        Rejected
+    }
+
+    /// <summary>选择是否开启实验场景的自动发射。</summary>
+    public enum CombatPlaygroundAutoFireState
+    {
+        Disabled,
+        Enabled
+    }
+
+    /// <summary>控制预设切换是否更新界面状态提示。</summary>
+    public enum CombatPlaygroundStatusUpdateMode
+    {
+        Silent,
+        Report
+    }
+
+    /// <summary>选择当前实验场景要调整的发射器或投射物参数。</summary>
+    public enum CombatPlaygroundAttackParameter
+    {
+        BaseDamage,
+        AttackRate,
+        Range,
+        ProjectileCount,
+        Penetration,
+        ProjectileSpeed,
+        CollisionRadius
+    }
+
+    /// <summary>选择敌人临时属性面板中要编辑的参数。</summary>
+    public enum CombatPlaygroundEnemyAttribute
+    {
+        HealthMultiplier,
+        MovementMultiplier,
+        DamageTakenMultiplier,
+        AttackDamageMultiplier,
+        AttackAvailabilityMultiplier,
+        BuffDuration
+    }
+
+    /// <summary>保存当前实验敌人的会话属性调节值。</summary>
+    public readonly struct CombatPlaygroundEnemyTuningSnapshot
+    {
+        public float HealthMultiplier { get; }
+        public float MovementMultiplier { get; }
+        public float DamageTakenMultiplier { get; }
+        public float AttackDamageMultiplier { get; }
+        public float AttackAvailabilityMultiplier { get; }
+        public float BuffDuration { get; }
+
+        /// <summary>创建敌人临时属性面板的只读快照。</summary>
+        public CombatPlaygroundEnemyTuningSnapshot(
+            float healthMultiplier,
+            float movementMultiplier,
+            float damageTakenMultiplier,
+            float attackDamageMultiplier,
+            float attackAvailabilityMultiplier,
+            float buffDuration)
+        {
+            HealthMultiplier = healthMultiplier;
+            MovementMultiplier = movementMultiplier;
+            DamageTakenMultiplier = damageTakenMultiplier;
+            AttackDamageMultiplier = attackDamageMultiplier;
+            AttackAvailabilityMultiplier = attackAvailabilityMultiplier;
+            BuffDuration = buffDuration;
+        }
     }
 
     /// <summary>
-    /// 保存 CombatPlayground 的会话内攻击和表现覆盖值。
+    /// 保存 CombatPlayground 的会话内发射器参数。
     /// </summary>
     [System.Serializable]
     public sealed class CombatPlaygroundTuning
@@ -24,10 +93,6 @@ namespace _Project.Tests.CombatPlayground.Model
         [SerializeField, Min(1)] private int projectileCount = 1;
         [SerializeField, Min(0)] private int penetration;
         [SerializeField, Min(0f)] private float chargeDuration = 0.08f;
-        [SerializeField, Range(0f, 1f)] private float scalePunch = 0.35f;
-        [SerializeField, Min(0.01f)] private float punchDuration = 0.24f;
-        [SerializeField] private Color flashColor = new(1f, 0.38f, 0.16f, 1f);
-        [SerializeField, Min(0f)] private float flashDuration = 0.16f;
 
         /// <summary>当前攻击基础伤害。</summary>
         public float BaseDamage => baseDamage;
@@ -47,18 +112,6 @@ namespace _Project.Tests.CombatPlayground.Model
         /// <summary>当前蓄力表现时长。</summary>
         public float ChargeDuration => chargeDuration;
 
-        /// <summary>当前缩放脉冲强度。</summary>
-        public float ScalePunch => scalePunch;
-
-        /// <summary>当前缩放脉冲时长。</summary>
-        public float PunchDuration => punchDuration;
-
-        /// <summary>当前命中闪烁颜色。</summary>
-        public Color FlashColor => flashColor;
-
-        /// <summary>当前命中闪烁时长。</summary>
-        public float FlashDuration => flashDuration;
-
         /// <summary>更新发射器基础伤害。</summary>
         public void SetBaseDamage(float value) => baseDamage = Mathf.Max(0f, value);
 
@@ -74,20 +127,7 @@ namespace _Project.Tests.CombatPlayground.Model
         /// <summary>更新一次攻击的穿透次数。</summary>
         public void SetPenetration(float value) => penetration = Mathf.Max(0, Mathf.RoundToInt(value));
 
-        /// <summary>更新蓄力表现时长。</summary>
-        public void SetChargeDuration(float value) => chargeDuration = Mathf.Max(0f, value);
 
-        /// <summary>更新缩放脉冲强度。</summary>
-        public void SetScalePunch(float value) => scalePunch = Mathf.Clamp01(value);
-
-        /// <summary>更新缩放脉冲时长。</summary>
-        public void SetPunchDuration(float value) => punchDuration = Mathf.Max(0.01f, value);
-
-        /// <summary>更新命中闪烁颜色。</summary>
-        public void SetFlashColor(Color value) => flashColor = value;
-
-        /// <summary>更新命中闪烁时长。</summary>
-        public void SetFlashDuration(float value) => flashDuration = Mathf.Max(0f, value);
     }
 
     /// <summary>
@@ -103,9 +143,13 @@ namespace _Project.Tests.CombatPlayground.Model
         public float MaximumEnergy { get; }
         public bool HasTarget { get; }
         public bool AutoFire { get; }
+        public CombatPlaygroundSkillExecutionMode SkillExecutionMode { get; }
+        public CombatPlaygroundEnemyTuningSnapshot EnemyTuning { get; }
         public int ShotCount { get; }
         public int SkillCount { get; }
         public string ProjectileName { get; }
+        public float ProjectileSpeed { get; }
+        public float CollisionRadius { get; }
         public string BuffName { get; }
         public string Status { get; }
         public string EventLog { get; }
@@ -120,9 +164,13 @@ namespace _Project.Tests.CombatPlayground.Model
             float maximumEnergy,
             bool hasTarget,
             bool autoFire,
+            CombatPlaygroundSkillExecutionMode skillExecutionMode,
+            CombatPlaygroundEnemyTuningSnapshot enemyTuning,
             int shotCount,
             int skillCount,
             string projectileName,
+            float projectileSpeed,
+            float collisionRadius,
             string buffName,
             string status,
             string eventLog)
@@ -135,9 +183,13 @@ namespace _Project.Tests.CombatPlayground.Model
             MaximumEnergy = maximumEnergy;
             HasTarget = hasTarget;
             AutoFire = autoFire;
+            SkillExecutionMode = skillExecutionMode;
+            EnemyTuning = enemyTuning;
             ShotCount = shotCount;
             SkillCount = skillCount;
             ProjectileName = projectileName;
+            ProjectileSpeed = projectileSpeed;
+            CollisionRadius = collisionRadius;
             BuffName = buffName;
             Status = status;
             EventLog = eventLog;

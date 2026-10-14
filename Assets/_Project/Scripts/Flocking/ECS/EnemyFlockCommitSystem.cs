@@ -1,6 +1,7 @@
 using Unity.Burst;
 using Unity.Burst.Intrinsics;
 using Unity.Collections;
+using GeometricMotion;
 using Unity.Entities;
 using Unity.Transforms;
 using UnityEngine;
@@ -15,6 +16,8 @@ namespace FlockingSystem.ECS
     /// </summary>
     [UpdateInGroup(typeof(SimulationSystemGroup))]
     [UpdateAfter(typeof(EnemyFlockSimulationSystem))]
+    [UpdateAfter(typeof(GeometricMotionSystem))]
+    [UpdateBefore(typeof(TransformSystemGroup))]
     public partial class EnemyFlockCommitSystem : SystemBase
     {
         private const int InvalidSlot = -1;

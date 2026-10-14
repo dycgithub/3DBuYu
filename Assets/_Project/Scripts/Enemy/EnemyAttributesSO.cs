@@ -7,7 +7,7 @@ namespace EnemySystem
     /// <summary>
     /// 敌人实体的静态配置。
     /// <para>该资产保存敌人的生命、战斗反馈和行为参数；速度、位置及群游算法参数由 <see cref="FlockingSystem.ECS.EnemyFlockSettingsSO"/> 提供。</para>
-    /// <para>行为组件只负责执行配置，不在预制体上重复保存基础数值。</para>
+    /// <para>范围精英战术参数只驱动状态机；范围半径、周期和 Buff 引用仍决定实际效果。</para>
     /// </summary>
     [CreateAssetMenu(fileName = "EnemyAttributes", menuName = "Enemy/Enemy Attributes")]
     public class EnemyAttributesSO : ScriptableObject
@@ -81,11 +81,20 @@ namespace EnemySystem
         [Min(0f)] public float assaultChargeDuration = 1f;
         [Min(0f)] public float assaultDashSpeed = 18f;
         [Min(0f)] public float assaultDashDistance = 8f;
+        [Tooltip("Boss 第二阶段连续执行的冲锋次数。")]
+        [Min(1)] public int assaultPhaseTwoDashCount = 2;
+        [Tooltip("冲锋动作完成后的恢复时间。")]
+        [Min(0f)] public float assaultAttackRecoveryDuration = 1f;
 
-        [Header("成长敌人")]
-        [Min(0f)] public float growthConsumeRadius = 1.25f;
-        [Range(0f, 1f)] public float growthConsumeChance = 0.25f;
-        [Min(0f)] public float growthCheckInterval = 0.25f;
+        [Header("吞噬 GOAP")]
+        [Tooltip("两次 GOAP 决策之间的最短间隔。")]
+        [Min(0f)] public float goapReplanInterval = 0.25f;
+        [Tooltip("Growth 查询可吞噬目标的半径。")]
+        [Min(0f)] public float growthTargetSearchRadius = 12f;
+        [Tooltip("Growth 与可吞噬目标的接近距离。")]
+        [Min(0f)] public float growthAbsorbRange = 1.5f;
+        [Tooltip("Growth 接近玩家并造成接触伤害的距离。")]
+        [Min(0f)] public float growthPlayerEngageRange = 1.5f;
 
         [Header("反弹敌人")]
         [Min(0f)] public float reflectWindowSeconds = 0.05f;
@@ -94,6 +103,10 @@ namespace EnemySystem
         [Min(0f)] public float shooterAttackRadius = 18f;
         [Min(0f)] public float shooterFireInterval = 2f;
         [Min(0f)] public float shooterDamage = 5f;
+        [Tooltip("玩家进入此距离时 Shooter 开始拉开距离。")]
+        [Min(0f)] public float shooterMinimumRange = 4f;
+        [Tooltip("第二阶段使用的射击间隔。")]
+        [Min(0f)] public float shooterPhaseTwoFireInterval = 1f;
         public ProjectileProfileSO shooterProjectileProfile;
 
         [Header("范围效果敌人")]
@@ -104,6 +117,30 @@ namespace EnemySystem
         public BuffDefinitionSO areaSlowBuff;
         public BuffDefinitionSO areaHealBuff;
 
+        [Header("范围精英战术")]
+        [Tooltip("范围精英搜索玩家或受伤盟友的半径。")]
+        [Min(0f)] public float areaSensingRadius = 15f;
+        [Tooltip("健康时与玩家保持的首选安全距离，也作为撤退距离的起点。")]
+        [Min(0f)] public float areaPreferredDistance = 8f;
+        [Tooltip("玩家低于此距离时优先撤退。")]
+        [Min(0f)] public float areaMinimumSafeDistance = 4f;
+        [Tooltip("生命值降低时撤退距离的上限。")]
+        [Min(0f)] public float areaMaximumRetreatDistance = 16f;
+        [Tooltip("生命比例不高于此值时触发撤退。")]
+        [Range(0f, 1f)] public float areaLowHealthRetreatThreshold = 0.3f;
+        [Tooltip("接近施法目标的基础移动速度，难度倍率作用前。")]
+        [Min(0f)] public float areaApproachSpeed = 2f;
+        [Tooltip("远离玩家的基础移动速度，难度倍率作用前。")]
+        [Min(0f)] public float areaRetreatSpeed = 2.5f;
+        [Tooltip("范围精英的最大转向速度，单位为度/秒。")]
+        [Min(0f)] public float areaTurnSpeed = 180f;
+        [Tooltip("两次完整目标搜索之间的秒数。")]
+        [Min(0.01f)] public float areaSensingInterval = 0.3f;
+        [Tooltip("每次持续释放范围效果的施法窗口时长。")]
+        [Min(0f)] public float areaCastWindowSeconds = 0.8f;
+        [Tooltip("两次施法窗口之间的冷却时长。")]
+        [Min(0f)] public float areaCastCooldownSeconds = 2.5f;
+
         [Header("子母敌人")]
         public Enemy childPrefab;
         [Min(0f)] public float childSpawnInterval = 5f;
@@ -111,6 +148,22 @@ namespace EnemySystem
         [Min(0f)] public float childSpawnRadius = 1.5f;
         [Min(0f)] public float childHealthMultiplier = 1f;
         [Min(0f)] public float childSpeedMultiplier = 1f;
+        [Tooltip("第一阶段期望维持的存活子敌人数。")]
+        [Min(0)] public int childPhaseOneTargetAlive = 2;
+        [Tooltip("第二阶段期望维持的存活子敌人数。")]
+        [Min(0)] public int childPhaseTwoTargetAlive = 5;
+        [Tooltip("第二阶段召唤子敌人的间隔。")]
+        [Min(0f)] public float childPhaseTwoSpawnInterval = 2.5f;
+        [Tooltip("Mother 接近到此距离后维持接触攻击。")]
+        [Min(0f)] public float motherPlayerEngageRange = 1.5f;
+
+        [Header("Boss 阶段")]
+        [Tooltip("生命值低于此比例时进入第二阶段。")]
+        [Range(0f, 1f)] public float bossSecondPhaseHealthPercent = 0.5f;
+        [Tooltip("Boss 第二阶段的定向移动速度倍率。")]
+        [Min(1f)] public float bossPhaseTwoSpeedMultiplier = 1.25f;
+        [Tooltip("Boss 实例的基础锁定威胁值。")]
+        [Range(0f, 100f)] public float bossThreatLevel = 80f;
 
         [Header("爆炸敌人")]
         [Min(0f)] public float explosionDamage = 15f;

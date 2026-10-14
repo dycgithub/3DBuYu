@@ -1,4 +1,6 @@
 using UnityEngine;
+using EffectSystem;
+
 namespace CombatSystem
 {
     /// <summary>
@@ -18,6 +20,10 @@ namespace CombatSystem
         [Min(0f)] [SerializeField] private float damageAmount = 50f;
         [SerializeField] private DamageType damageType = DamageType.Physical;
         [SerializeField] private SkillActionDefinitionSO actionDefinition;
+
+        [Header("视效")]
+        [SerializeField] private EffectId visualEffectId;
+        [SerializeField] private SkillVisualEffectAnchor visualEffectAnchor;
 
         /// <summary>获取技能标识。</summary>
         public string SkillIdentifier => skillIdentifier;
@@ -39,6 +45,12 @@ namespace CombatSystem
 
         /// <summary>获取可选的自定义动作定义。</summary>
         public SkillActionDefinitionSO ActionDefinition => actionDefinition;
+
+        /// <summary>获取技能成功执行后播放的可选目录特效。</summary>
+        public EffectId VisualEffectId => visualEffectId;
+
+        /// <summary>获取技能特效的定位方式。</summary>
+        public SkillVisualEffectAnchor VisualEffectAnchor => visualEffectAnchor;
 
         /// <summary>
         /// 创建未保存到工程的运行时技能定义。

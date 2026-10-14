@@ -4,7 +4,7 @@ using _Project.UI.Animations;
 
 /// <summary>
 /// UIPanelShowHide 的条件 Inspector。
-/// 通过功能开关控制参数显示，并按当前主体模式隐藏无关的 Scale 配置。
+/// 通过功能开关控制参数显示，并按当前主体模式隐藏无关配置。
 /// </summary>
 [CustomEditor(typeof(UIPanelShowHide))]
 public sealed class UIPanelShowHideEditor : Editor
@@ -12,6 +12,7 @@ public sealed class UIPanelShowHideEditor : Editor
     private SerializedProperty _panel;
     private SerializedProperty _group;
     private SerializedProperty _startHidden;
+    private SerializedProperty _transitionRaycastMode;
 
     private SerializedProperty _transformAnimation;
     private SerializedProperty _mode;
@@ -35,6 +36,7 @@ public sealed class UIPanelShowHideEditor : Editor
         _panel = serializedObject.FindProperty("_panel");
         _group = serializedObject.FindProperty("_group");
         _startHidden = serializedObject.FindProperty("_startHidden");
+        _transitionRaycastMode = serializedObject.FindProperty("_transitionRaycastMode");
 
         _transformAnimation = serializedObject.FindProperty("_transformAnimation");
         _mode = serializedObject.FindProperty("_mode");
@@ -62,6 +64,7 @@ public sealed class UIPanelShowHideEditor : Editor
         DrawProperty(_panel, "面板主体");
         DrawProperty(_group, "交互 CanvasGroup");
         DrawProperty(_startHidden, "初始化时隐藏");
+        DrawProperty(_transitionRaycastMode, "动画期间拦截底层输入");
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("主体变换", EditorStyles.boldLabel);

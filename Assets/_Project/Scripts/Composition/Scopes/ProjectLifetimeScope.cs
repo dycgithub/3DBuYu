@@ -49,6 +49,8 @@ public class ProjectLifetimeScope : LifetimeScope
         builder.RegisterComponentInHierarchy<InventorySystem.Shop.ShopManager>().As<IShopService>().AsSelf();
         // === 物品目录(配置优先,默认空目录) ===
         new ProjectInventoryInstaller(itemCatalog).Install(builder);
+        // 抽奖资源跨 UI 场景共享；开箱状态由 SupplySceneLifetimeScope 持有。
+        new SupplyInstaller().Install(builder);
         // === DDOL 场景组件(挂在 ScopeContainer 下,永不销毁) ===
         builder.RegisterComponentInHierarchy<ResourceManager>().As<IPointsService>();
         builder.RegisterComponentInHierarchy<AudioManager>().AsSelf();

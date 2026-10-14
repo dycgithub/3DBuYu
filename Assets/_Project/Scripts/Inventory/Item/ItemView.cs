@@ -8,7 +8,7 @@ using VContainer;
 
 /// <summary>
 /// - 逐格形状渲染:每个形状点 = 一个小方块,T形显示成T形,旋转时方块跟着转
-/// - 拖拽/旋转/放置/跨网格:数据走 TetrisItemVM,松手 RaycastAll 找目标网格
+/// - 拖拽/旋转/放置/跨网格:数据走 TetrisItemVM,拖拽 Raycast 复用指针数据与结果列表
 /// - 指针悬停和选中:把交互状态转发给 ItemOutlineView,由轮廓组件统一绘制
 /// - 指针按压:把按下/抬起表现转发给 ItemPressEffect,不改变网格定位
 /// 外壳 Image 作为拖拽热区(可放底图,不放则只有形状方块可见)。
@@ -27,6 +27,9 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
     private Camera pointerCamera;
     private GridView lastHighlightGrid;
     private List<Image> cells = new();
+    private readonly List<RaycastResult> _raycastResults = new();
+    private EventSystem _cachedRaycastEventSystem;
+    private PointerEventData _cachedPointerEventData;
     private ItemOutlineView outline;
     private ItemPressEffect pressEffect;
     private ItemMaskedVisual maskedVisual;
@@ -57,8 +60,13 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         maskedVisual = GetComponentInChildren<ItemMaskedVisual>(true);
     }
 
+    /// <summary>绑定物品和网格；编辑器准备商品时 Awake 未运行，先补齐组件缓存再绘制。</summary>
     public void Init(GridView grid, ItemVM item, int col, int row)
     {
+        if (rect == null)
+        {
+            Awake();
+        }
         OwnerGrid = grid;
         ItemVM = item;
 
@@ -258,6 +266,22 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         pressEffect?.Release();
     }
 
+    /// <summary>组件停用时回滚未结束的拖拽事务并清理影子状态。</summary>
+    private void OnDisable()
+    {
+        if (!isDragging)
+        {
+            return;
+        }
+
+        isDragging = false;
+        RestoreDragOrigin();
+
+        ClearHighLight();
+        ClearGhost();
+        _inventory?.SetDragging(null);
+    }
+
     public void OnPointerClick(PointerEventData eventData)
     {
         _selection?.Select(this);
@@ -287,8 +311,15 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         outline.SetHovered(hovered);
     }
 
+    /// <summary>仅允许一个物品同时拖拽，避免装备顺序事务交叉。</summary>
+    /// <param name="eventData">当前拖拽指针事件。</param>
     public void OnBeginDrag(PointerEventData eventData)
     {
+        if (_inventory?.DraggingItem != null && _inventory.DraggingItem != this)
+        {
+            return;
+        }
+
         pressEffect?.Cancel();
         _selection?.Select(this);
         _tooltip?.HideHover(this);
@@ -311,13 +342,13 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         ghost = go.AddComponent<ItemGhostView>();
         ghost.Init(OwnerGrid, ItemVM);
 
-        RefreshGhost(eventData.position);
+        RefreshGhost(eventData.position, eventData);
     }
 
     public void OnDrag(PointerEventData eventData)
     {
         if (!isDragging) return;
-        RefreshGhost(eventData.position);
+        RefreshGhost(eventData.position, eventData);
     }
 
     public void OnEndDrag(PointerEventData eventData)
@@ -330,7 +361,7 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         _inventory.SetDragging(null);
 
         bool placed = false;
-        GridView target = FindTargetGrid(eventData.position);
+        GridView target = FindTargetGrid(eventData);
         if (target != null &&
             target.ScreenToGrid(eventData.position, pointerCamera, out int targetCol, out int targetRow) &&
             target.CanPlace(ItemVM, targetCol, targetRow))
@@ -344,12 +375,11 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
 
         if (!placed)
         {
-            // 回退:先还原拖拽前的方向,再放回原坐标,避免"旋转后回退"导致错位/重叠/丢物品
-            ItemVM.SetDirection(originDir);
-            rect.sizeDelta = OwnerGrid.SizeFor(ItemVM);
-            RebuildCells();
-            if (!OwnerGrid.PlaceItem(this, originCol, originRow))
+            // 回滚必须使用暂停时保存的顺序，避免失败拖拽改变最新装备道具。
+            if (!RestoreDragOrigin())
+            {
                 Debug.LogWarning("[ItemView] 回退放置失败,物品可能丢失", this);
+            }
         }
 
         ClearHighLight();
@@ -360,9 +390,77 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
 
     private void OnDestroy()
     {
+        ClearGhost();
+        if (_inventory?.DraggingItem == this)
+        {
+            _inventory.SetDragging(null);
+        }
+
         _tooltip?.HideHover(this);
         if (_selection != null && _selection.SelectedItem == this)
             _selection.ClearSelection();
+    }
+
+    /// <summary>销毁当前拖拽影子并清除其引用。</summary>
+    private void ClearGhost()
+    {
+        if (ghost == null)
+        {
+            return;
+        }
+
+        if (Application.isPlaying)
+        {
+            Destroy(ghost.gameObject);
+        }
+        else
+        {
+            DestroyImmediate(ghost.gameObject);
+        }
+        ghost = null;
+    }
+
+    /// <summary>网格整体清空时中止拖拽，防止延迟的 OnEndDrag 恢复旧物品。</summary>
+    internal void CancelDragForGridClear()
+    {
+        if (!isDragging)
+        {
+            return;
+        }
+
+        isDragging = false;
+        RestoreDragOrigin();
+        ClearHighLight();
+        ClearGhost();
+
+        if (_inventory?.DraggingItem == this)
+        {
+            _inventory.SetDragging(null);
+        }
+    }
+
+    /// <summary>检查当前拖拽是否指向指定目标网格。</summary>
+    /// <param name="grid">待检查的目标网格。</param>
+    /// <returns>指针或放置高亮位于该网格时返回 true。</returns>
+    internal bool IsDraggingOver(GridView grid)
+    {
+        return isDragging && (lastHighlightGrid == grid || _inventory?.HoveredGrid == grid);
+    }
+
+    /// <summary>把暂停的网格物品恢复到拖拽开始时的位置和方向。</summary>
+    /// <returns>无需恢复或成功放回时返回 true。</returns>
+    private bool RestoreDragOrigin()
+    {
+        if (OwnerGrid == null || OwnerGrid.GridVM == null ||
+            !OwnerGrid.GridVM.IsSuspended(ItemVM))
+        {
+            return true;
+        }
+
+        ItemVM.SetDirection(originDir);
+        rect.sizeDelta = OwnerGrid.SizeFor(ItemVM);
+        RebuildCells();
+        return OwnerGrid.PlaceItem(this, originCol, originRow);
     }
 
     /// <summary>
@@ -403,9 +501,14 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         return false;
     }
 
-    private void RefreshGhost(Vector2 screenPos)
+    /// <summary>按当前指针位置更新影子与目标网格高亮。</summary>
+    /// <param name="screenPos">当前指针的屏幕坐标。</param>
+    /// <param name="eventData">Unity 当前拖拽事件；非拖拽定位时为空。</param>
+    private void RefreshGhost(Vector2 screenPos, PointerEventData eventData = null)
     {
-        GridView target = FindTargetGrid(screenPos);
+        GridView target = eventData != null
+            ? FindTargetGrid(eventData)
+            : FindTargetGridAtPosition(screenPos);
         if (target != null && target.ScreenToGrid(screenPos, pointerCamera, out int col, out int row))
         {
             if (lastHighlightGrid != null && lastHighlightGrid != target) lastHighlightGrid.HideHighlight();
@@ -446,24 +549,54 @@ public class ItemView : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDrag
         }
     }
 
-    /// <summary>松手时查一次鼠标下的网格(不做每帧开销)。</summary>
-    private GridView FindTargetGrid(Vector2 screenPos)
+    /// <summary>通过当前 UI 指针事件查找下方网格，并复用结果缓冲区。</summary>
+    /// <param name="eventData">当前指针事件。</param>
+    /// <returns>命中的网格；未命中时返回 null。</returns>
+    private GridView FindTargetGrid(PointerEventData eventData)
     {
-        if (EventSystem.current == null) return null;
+        EventSystem eventSystem = EventSystem.current;
+        if (eventSystem == null || eventData == null)
+        {
+            return null;
+        }
 
-        var eventData = new PointerEventData(EventSystem.current)
+        _raycastResults.Clear();
+        eventSystem.RaycastAll(eventData, _raycastResults);
+        for (int index = 0; index < _raycastResults.Count; index++)
         {
-            position = screenPos
-        };
-        var results = new List<RaycastResult>();
-        EventSystem.current.RaycastAll(eventData, results);
-        for (int i = 0; i < results.Count; i++)
-        {
-            if (results[i].gameObject == null) continue;
-            var grid = results[i].gameObject.GetComponentInParent<GridView>();
-            if (grid != null) return grid;
+            if (_raycastResults[index].gameObject == null)
+            {
+                continue;
+            }
+
+            GridView grid = _raycastResults[index].gameObject.GetComponentInParent<GridView>();
+            if (grid != null)
+            {
+                return grid;
+            }
         }
 
         return null;
+    }
+
+    /// <summary>为非拖拽调用复用指针数据并查找下方网格。</summary>
+    /// <param name="screenPos">用于查询的屏幕坐标。</param>
+    /// <returns>命中的网格；未命中时返回 null。</returns>
+    private GridView FindTargetGridAtPosition(Vector2 screenPos)
+    {
+        EventSystem eventSystem = EventSystem.current;
+        if (eventSystem == null)
+        {
+            return null;
+        }
+
+        if (_cachedRaycastEventSystem != eventSystem)
+        {
+            _cachedRaycastEventSystem = eventSystem;
+            _cachedPointerEventData = new PointerEventData(eventSystem);
+        }
+
+        _cachedPointerEventData.position = screenPos;
+        return FindTargetGrid(_cachedPointerEventData);
     }
 }

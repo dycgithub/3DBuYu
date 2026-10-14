@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
 using CombatSystem;
+using UnityEngine.Localization;
+using UnityEngine.Localization.Settings;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -8,7 +10,7 @@ using UnityEngine.UI;
 
 namespace _Project.UI.Card
 {
-    /// <summary>显示物品外观与外部提供的可用性结果；点击只发布卡牌选择事件。</summary>
+    /// <summary>显示当前语言的物品和技能状态；点击只发布选择事件，语言切换不影响技能。</summary>
     [ExecuteAlways]
     public sealed class CardView : MonoBehaviour, IPointerClickHandler
     {
@@ -44,6 +46,27 @@ namespace _Project.UI.Card
             }
 
             canvasGroup ??= GetComponent<CanvasGroup>();
+            LocalizationSettings.SelectedLocaleChanged += RefreshLanguage;
+        }
+
+        /// <summary>重读物品译文和可用性提示，不重新绑定或消耗技能。</summary>
+        private void RefreshLanguage(Locale _)
+        {
+            if (_skill == null)
+            {
+                return;
+            }
+
+            ItemDefinition item = _skill.SourceItemDefinition;
+            if (titleText != null)
+            {
+                titleText.text = item?.DisplayName ?? string.Empty;
+            }
+
+            _baseDescription = item?.Description ?? string.Empty;
+            var reason = Availability;
+            _availability = null;
+            ApplyAvailability(reason);
         }
 
         /// <summary>首次绑定卡牌时写入静态物品外观；同一实例不会因状态刷新重复绑定。</summary>
@@ -110,15 +133,15 @@ namespace _Project.UI.Card
             {
                 string message = reason switch
                 {
-                    SkillActivationFailureReason.InsufficientEnergy => "能量不足",
-                    SkillActivationFailureReason.NoValidTarget => "没有可用目标",
-                    SkillActivationFailureReason.InvalidTarget => "目标配置无效",
-                    SkillActivationFailureReason.CooldownActive => "冷却中",
-                    SkillActivationFailureReason.UsesExhausted => "次数耗尽",
-                    SkillActivationFailureReason.CombatActionsNotAllowed => "当前阶段不可释放",
-                    SkillActivationFailureReason.SourceItemUnavailable => "道具未装备",
-                    SkillActivationFailureReason.SourceConsumptionFailed => "道具移除失败",
-                    SkillActivationFailureReason.ActionFailed => "技能执行失败",
+                    SkillActivationFailureReason.InsufficientEnergy => L10n.Get("card.insufficientEnergy"),
+                    SkillActivationFailureReason.NoValidTarget => L10n.Get("card.noTarget"),
+                    SkillActivationFailureReason.InvalidTarget => L10n.Get("card.invalidTarget"),
+                    SkillActivationFailureReason.CooldownActive => L10n.Get("card.cooldownActive"),
+                    SkillActivationFailureReason.UsesExhausted => L10n.Get("card.usesExhausted"),
+                    SkillActivationFailureReason.CombatActionsNotAllowed => L10n.Get("card.actionsBlocked"),
+                    SkillActivationFailureReason.SourceItemUnavailable => L10n.Get("card.itemUnavailable"),
+                    SkillActivationFailureReason.SourceConsumptionFailed => L10n.Get("card.consumptionFailed"),
+                    SkillActivationFailureReason.ActionFailed => L10n.Get("card.actionFailed"),
                     _ => string.Empty
                 };
                 descriptionText.text = _baseDescription +
@@ -136,17 +159,17 @@ namespace _Project.UI.Card
 
             if (energyText != null)
             {
-                energyText.text = $"能量 {_skill.EnergyCost:0.##}";
+                energyText.text = L10n.Get("card.energy", _skill.EnergyCost);
             }
 
             if (usesText != null)
             {
-                usesText.text = $"次数 {_skill.RemainingUses}";
+                usesText.text = L10n.Get("card.uses", _skill.RemainingUses);
             }
 
             if (cooldownText != null)
             {
-                cooldownText.text = $"冷却 {_skill.RemainingCooldownSeconds:0.##}/{_skill.CooldownSeconds:0.##}";
+                cooldownText.text = L10n.Get("card.cooldown", _skill.RemainingCooldownSeconds, _skill.CooldownSeconds);
             }
         }
 
@@ -230,6 +253,7 @@ namespace _Project.UI.Card
         /// <summary>销毁时解绑按钮监听。</summary>
         private void OnDestroy()
         {
+            LocalizationSettings.SelectedLocaleChanged -= RefreshLanguage;
             if (button != null)
             {
                 button.onClick.RemoveListener(HandleClick);

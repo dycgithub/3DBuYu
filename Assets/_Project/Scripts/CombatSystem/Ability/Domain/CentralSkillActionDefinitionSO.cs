@@ -12,7 +12,7 @@ namespace CombatSystem
     public sealed class CentralSkillActionDefinitionSO : SkillActionDefinitionSO
     {
         private const float DefaultPushImpulseStrength = 1f;
-        private const float DefaultDamageAmount = 100f;
+        private const float DefaultDamageAmount = 50f;
         private const float DefaultSlowMultiplier = 0.5f;
         private const float DefaultFireRateMultiplier = 2f;
 

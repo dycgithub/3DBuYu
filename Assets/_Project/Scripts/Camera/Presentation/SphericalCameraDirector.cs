@@ -6,6 +6,7 @@ using Play;
 using R3;
 using Services;
 using UnityEngine;
+using UnityEngine.Serialization;
 using VContainer;
 using EnemySystem;
 
@@ -13,18 +14,27 @@ namespace CameraSystem
 {
     /// <summary>
     /// 管理球面战斗的 Follow/Regional 模式，并调度共用镜头表现。
-    /// <para>本类统一持有共用参数，并分别管理两个模式的初始化、可用状态和优先级。</para>
+    /// <para>本类统一持有共用参数，管理两个模式的初始化与优先级，并提供不受渲染惯性影响的移动基底。</para>
     /// </summary>
     [DefaultExecutionOrder(-50)]
-    public sealed class SphericalCameraDirector : MonoBehaviour
+    public sealed class SphericalCameraDirector : MonoBehaviour, ICameraMovementBasis
     {
         private const float MinimumFieldOfView = 1f;
         private const float MaximumFieldOfView = 179f;
         private const float DefaultFieldOfView = 61f;
         private const float MaximumCoverageRadius = 89f;
         private const float MinimumDelaySeconds = 0.001f;
-        private const float DefaultFollowDelaySeconds = 0.2f;
-        private const float DefaultReturnDelaySeconds = 0.1f;
+        private const float MinimumCameraDistance = 5f;
+        private const float MaximumCameraDistance = 35f;
+        private const float DefaultCameraDistance = 12.5f;
+        private const float CameraDistanceUnitsPerSecond = 8f;
+        private const float CameraOrbitDegreesPerSecond = 90f;
+        private const float CameraElevationDegreesPerSecond = 60f;
+        private const float DefaultCameraElevationDegrees = 70f;
+        private const float MinimumCameraElevationDegrees = 15f;
+        private const float MaximumCameraElevationDegrees = 85f;
+        private const float DefaultFollowDelaySeconds = 0.3f;
+        private const float DefaultReturnDelaySeconds = 0.18f;
 
         /// <summary>当前使用的摄像机模式。</summary>
         public enum CameraMode
@@ -58,14 +68,13 @@ namespace CameraSystem
         private CinemachineImpulseSource _impulseSource;
 
         [Header("Follow 参数")]
-        [SerializeField, Min(0f), Tooltip("摄像机相对球面半径的额外距离。")]
-        private float _cameraDistanceOffset = 12.5f;
+        [SerializeField, Min(MinimumCameraDistance), FormerlySerializedAs("_cameraDistanceOffset"),
+         Tooltip("跟随摄像机与玩家之间的距离。")]
+        private float _cameraDistance = DefaultCameraDistance;
         [SerializeField, Min(MinimumDelaySeconds), Tooltip("玩家移动时摄像机追随方向的平滑时间，单位为秒。")]
         private float _followDelaySeconds = DefaultFollowDelaySeconds;
         [SerializeField, Min(MinimumDelaySeconds), Tooltip("玩家停止移动时摄像机回归方向的平滑时间，单位为秒。")]
         private float _returnDelaySeconds = DefaultReturnDelaySeconds;
-        [SerializeField, Tooltip("沿球面切线向上的注视点偏移量。")]
-        private float _lookAtVerticalOffset;
 
         [Header("Regional 参数")]
         [SerializeField, Min(0f), Tooltip("切换区域摄像机所需的额外角度差，单位为度，用于避免边界抖动。")]
@@ -110,11 +119,14 @@ namespace CameraSystem
         [Inject] private IEnemyPopulationService _populationService;
         [Inject] private IKillStreakService _killStreak;
         [Inject] private IDamageEventSource _damageEventSource;
+        [Inject] private IInputService _inputService;
         [Inject] private GameManager _gameManager;
         [Inject] private CentralCore _centralCore;
         [Inject] private SphereWalker _injectedWalker;
 
         private CameraMode _currentMode;
+        private float _manualOrbitAngleDegrees;
+        private float _manualOrbitElevationDegrees = DefaultCameraElevationDegrees;
         private float _pressureWeight;
         private float _populationIntroTimer;
         private float _lastImpulseTime = float.NegativeInfinity;
@@ -125,6 +137,7 @@ namespace CameraSystem
         private bool _followReady;
         private bool _regionalReady;
         private bool _eventsSubscribed;
+        private readonly SphericalCameraMovementBasis _movementBasis = new();
 
         private IDisposable _populationStartedSubscription;
         private IDisposable _enemyCountSubscription;
@@ -138,6 +151,17 @@ namespace CameraSystem
             => _currentMode == CameraMode.Follow
                 ? _followReady ? _follow?.Camera : null
                 : _regionalReady ? _regional?.ActiveCamera : null;
+
+        /// <summary>
+        /// 将玩家输入转换为不受渲染摄像机惯性影响的球面切线方向。
+        /// </summary>
+        /// <param name="input">屏幕左右、上下输入。</param>
+        /// <param name="surfaceNormal">玩家所在球面的单位法线。</param>
+        /// <returns>长度不超过一的世界切线方向。</returns>
+        public Vector3 GetMoveDirection(Vector2 input, Vector3 surfaceNormal)
+        {
+            return _movementBasis.GetDirection(input, surfaceNormal);
+        }
 
         private void Awake()
         {
@@ -163,20 +187,29 @@ namespace CameraSystem
         private void LateUpdate()
         {
             if (!_initialized)
+            {
                 return;
+            }
 
             float deltaTime = Time.deltaTime;
             if (!IsFinite(deltaTime) || deltaTime <= 0f)
+            {
                 return;
+            }
 
             bool isPaused = _gameManager != null && _gameManager.CurrentState == GameState.Paused;
             if (!isPaused)
             {
+                bool orbitChanged = UpdateCameraControls(deltaTime);
                 bool isPlaying = IsRunPlaying();
                 if (isPlaying)
+                {
                     _populationIntroTimer = Mathf.Max(0f, _populationIntroTimer - deltaTime);
+                }
                 else
+                {
                     _populationIntroTimer = 0f;
+                }
 
                 bool shouldRestore = _runSettled || (_gameManager != null && !isPlaying);
                 float pressureTarget = shouldRestore
@@ -192,10 +225,21 @@ namespace CameraSystem
                 {
                     _follow?.Tick(
                         deltaTime,
-                        _cameraDistanceOffset,
+                        _cameraDistance,
                         _followDelaySeconds,
                         _returnDelaySeconds,
-                        _lookAtVerticalOffset);
+                        0f,
+                        CameraFocusTarget.None,
+                        0f,
+                        0f,
+                        0f,
+                        _manualOrbitAngleDegrees,
+                        _manualOrbitElevationDegrees);
+                }
+
+                if (orbitChanged)
+                {
+                    ResetMovementBasis();
                 }
             }
 
@@ -261,6 +305,7 @@ namespace CameraSystem
 
             ApplyCameraPriorities();
             ApplyFieldOfView();
+            ResetMovementBasis();
         }
 
         /// <summary>手动切换到 Follow 模式。</summary>
@@ -278,6 +323,7 @@ namespace CameraSystem
                 : _injectedWalker != null
                     ? _injectedWalker
                     : _centralCore != null ? _centralCore.SphereWalker : null;
+            _walker = walker;
 
             _followReady = InitializeFollow(walker);
             _regionalReady = InitializeRegional(walker);
@@ -317,11 +363,94 @@ namespace CameraSystem
         private void ResolveReferences()
         {
             if (_follow == null)
+            {
                 _follow = GetComponentInChildren<SphericalCameraFollow>(true);
+            }
+
             if (_regional == null)
+            {
                 _regional = GetComponentInChildren<SphericalCameraRegional>(true);
+            }
+
             if (_impulseSource == null)
+            {
                 _impulseSource = GetComponent<CinemachineImpulseSource>();
+            }
+        }
+
+        private void ResetMovementBasis()
+        {
+            if (_walker == null)
+            {
+                return;
+            }
+
+            Vector3 offset = _walker.transform.position - _walker.GetEffectiveCenter();
+            if (!IsFinite(offset) || offset.sqrMagnitude < 0.000001f)
+            {
+                return;
+            }
+
+            Transform reference = GetMovementReference();
+            _movementBasis.Reset(
+                offset.normalized,
+                reference != null ? reference.right : Vector3.zero,
+                reference != null ? reference.up : Vector3.zero);
+        }
+
+        /// <summary>在进行中的 Follow 模式应用按住式相机距离和四向环绕输入。</summary>
+        /// <param name="deltaTime">本帧经过的缩放时间，单位为秒。</param>
+        /// <returns>本帧是否改变环绕角。</returns>
+        private bool UpdateCameraControls(float deltaTime)
+        {
+            if (_currentMode != CameraMode.Follow ||
+                !_followReady ||
+                _inputService == null ||
+                !IsRunPlaying())
+            {
+                return false;
+            }
+
+            float distanceInput = _inputService.CameraDistanceInput;
+            if (IsFinite(distanceInput))
+            {
+                _cameraDistance = Mathf.Clamp(
+                    _cameraDistance + distanceInput * CameraDistanceUnitsPerSecond * deltaTime,
+                    MinimumCameraDistance,
+                    MaximumCameraDistance);
+            }
+
+            Vector2 orbitInput = _inputService.CameraOrbitInput;
+            if (!IsFinite(orbitInput) || orbitInput.sqrMagnitude < 0.000001f)
+            {
+                return false;
+            }
+
+            _manualOrbitAngleDegrees = Mathf.Repeat(
+                _manualOrbitAngleDegrees + orbitInput.x * CameraOrbitDegreesPerSecond * deltaTime,
+                360f);
+            _manualOrbitElevationDegrees = Mathf.Clamp(
+                _manualOrbitElevationDegrees + orbitInput.y * CameraElevationDegreesPerSecond * deltaTime,
+                MinimumCameraElevationDegrees,
+                MaximumCameraElevationDegrees);
+            return true;
+        }
+
+        private Transform GetMovementReference()
+        {
+            if (_currentMode == CameraMode.Follow && _followReady)
+            {
+                return _follow?.Camera != null ? _follow.Camera.transform : null;
+            }
+
+            if (_currentMode == CameraMode.Regional && _regionalReady)
+            {
+                return _regional?.ActiveCamera != null
+                    ? _regional.ActiveCamera.transform
+                    : null;
+            }
+
+            return null;
         }
 
         private void SetInitialMode()
@@ -398,7 +527,9 @@ namespace CameraSystem
         private void SubscribeEvents()
         {
             if (_eventsSubscribed)
+            {
                 return;
+            }
 
             SyncRunState();
             if (_populationService != null)
@@ -410,7 +541,9 @@ namespace CameraSystem
             }
 
             if (_killStreak != null)
+            {
                 _streakSubscription = _killStreak.CurrentStreak.Subscribe(HandleStreakChanged);
+            }
 
             if (_damageEventSource != null)
             {
@@ -452,7 +585,9 @@ namespace CameraSystem
         private void HandlePopulationStarted(int _)
         {
             if (_runSettled || !IsRunPlaying())
+            {
                 return;
+            }
 
             _populationIntroTimer = Mathf.Max(_populationIntroTimer, Mathf.Max(0f, _populationIntroDuration));
             GenerateImpulse(_populationImpulseForce);
@@ -511,7 +646,9 @@ namespace CameraSystem
         {
             float duration = Mathf.Max(0f, _populationIntroDuration);
             if (duration <= 0f)
+            {
                 return 0f;
+            }
 
             float normalized = Mathf.Clamp01(_populationIntroTimer / duration);
             return normalized * normalized * (3f - 2f * normalized);
@@ -521,11 +658,15 @@ namespace CameraSystem
         {
             if (_impulseSource == null || !_impulseSource.isActiveAndEnabled ||
                 !IsFinite(force) || force <= 0f)
+            {
                 return;
+            }
 
             float currentTime = Time.unscaledTime;
             if (_impulseCooldown > 0f && currentTime - _lastImpulseTime < _impulseCooldown)
+            {
                 return;
+            }
 
             _lastImpulseTime = currentTime;
             Vector3 origin = _centralCore != null && _centralCore.SphereWalker != null
@@ -542,9 +683,14 @@ namespace CameraSystem
         private void SyncRunState()
         {
             if (_populationService != null)
+            {
                 _enemiesAlive = Mathf.Max(0, _populationService.EnemiesAlive);
+            }
+
             if (_gameManager == null)
+            {
                 return;
+            }
 
             GameState state = _gameManager.CurrentState;
             _runSettled = state is GameState.Menu or GameState.Settled or GameState.Supply or GameState.Failed;
@@ -560,10 +706,11 @@ namespace CameraSystem
             _activePriority = Mathf.Clamp(_activePriority, 0, 100);
             _inactivePriority = Mathf.Clamp(_inactivePriority, 0, _activePriority);
             _baseFieldOfView = NormalizeFieldOfView(_baseFieldOfView);
-            _cameraDistanceOffset = NormalizeNonNegative(_cameraDistanceOffset);
+            _cameraDistance = IsFinite(_cameraDistance)
+                ? Mathf.Clamp(_cameraDistance, MinimumCameraDistance, MaximumCameraDistance)
+                : DefaultCameraDistance;
             _followDelaySeconds = NormalizePositive(_followDelaySeconds, DefaultFollowDelaySeconds);
             _returnDelaySeconds = NormalizePositive(_returnDelaySeconds, DefaultReturnDelaySeconds);
-            _lookAtVerticalOffset = IsFinite(_lookAtVerticalOffset) ? _lookAtVerticalOffset : 0f;
             _switchHysteresisDegrees = NormalizeNonNegative(_switchHysteresisDegrees);
             _coverageRadiusDegrees = Mathf.Min(
                 MaximumCoverageRadius,
@@ -600,6 +747,16 @@ namespace CameraSystem
         private static float NormalizePositive(float value, float fallback)
         {
             return IsFinite(value) ? Mathf.Max(MinimumDelaySeconds, value) : fallback;
+        }
+
+        private static bool IsFinite(Vector3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        private static bool IsFinite(Vector2 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y);
         }
 
         private static bool IsFinite(float value)

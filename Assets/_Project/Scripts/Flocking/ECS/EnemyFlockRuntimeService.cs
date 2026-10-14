@@ -11,10 +11,10 @@ using VContainer.Unity;
 namespace FlockingSystem.ECS
 {
     /// <summary>
-    /// 管理 ECS 敌人的原型、槽位、渲染资源和 GameObject Transform 桥接。
+    /// 管理 ECS 敌人的实体、槽位、运动命令和托管 Transform 桥接。
     /// <para>
     /// 本服务只处理实体生命周期、托管命令和表现资源；群游计算由
-    /// EnemyFlockSimulationSystem 执行，姿态提交由 EnemyFlockCommitSystem 执行。
+    /// EnemyFlockSimulationSystem 执行，最终 Transform 写入由 EnemyFlockCommitSystem 执行。
     /// </para>
     /// </summary>
     public sealed partial class EnemyFlockRuntimeService : IDisposable, ITickable
@@ -67,12 +67,14 @@ namespace FlockingSystem.ECS
         }
 
         /// <summary>
-        /// 批量提交本帧收到的速度变化，避免每个 Buff 逐次完成 ECS Job。
+        /// 批量提交速度、视觉和运动命令，在 ECS 安全阶段统一写入。
         /// </summary>
         public void Tick()
         {
             using var profilerScope = TickMarker.Auto();
-            if (_pendingSpeedMultipliers.Count == 0 && _pendingVisualStates.Count == 0)
+            if (_pendingSpeedMultipliers.Count == 0 &&
+                _pendingVisualStates.Count == 0 &&
+                !HasPendingMotion)
             {
                 return;
             }
@@ -81,6 +83,7 @@ namespace FlockingSystem.ECS
             {
                 _pendingSpeedMultipliers.Clear();
                 _pendingVisualStates.Clear();
+                ClearPendingMotion();
                 return;
             }
 
@@ -103,6 +106,7 @@ namespace FlockingSystem.ECS
                 ApplyVisualState(pending.Key, pending.Value);
             }
 
+            FlushPendingMotion();
             _pendingSpeedMultipliers.Clear();
             _pendingVisualStates.Clear();
         }
@@ -291,22 +295,6 @@ namespace FlockingSystem.ECS
             _entityManager.SetComponentData(bridge.Entity, agent);
         }
 
-        /// <summary>切换代理是否暂停群游位移并接受外部 Transform 驱动。</summary>
-        /// <param name="bridge">目标敌人的 ECS 桥接。</param>
-        /// <param name="enabled">是否启用外部运动模式。</param>
-        internal void UpdateAgentExternalMotion(EnemyFlockBridge bridge, bool enabled)
-        {
-            if (!CanUpdateAgent(bridge))
-            {
-                return;
-            }
-
-            CompleteJobsBeforeStructuralChange();
-            EnemyFlockAgent agent = _entityManager.GetComponentData<EnemyFlockAgent>(bridge.Entity);
-            agent.UseExternalMotion = enabled;
-            _entityManager.SetComponentData(bridge.Entity, agent);
-        }
-
         /// <summary>更新单个 ECS 敌人的受击或死亡颜色。</summary>
         /// <param name="bridge">目标敌人与 ECS 实体的桥接。</param>
         /// <param name="color">线性空间颜色。</param>
@@ -346,6 +334,7 @@ namespace FlockingSystem.ECS
 
             _pendingSpeedMultipliers.Remove(bridge);
             _pendingVisualStates.Remove(bridge);
+            ForgetPendingMotion(bridge);
 
             if (_disposed)
             {
@@ -410,6 +399,7 @@ namespace FlockingSystem.ECS
             DisposeVisualResources();
             _pendingSpeedMultipliers.Clear();
             _pendingVisualStates.Clear();
+            ClearPendingMotion();
             _disposed = true;
         }
 
@@ -506,6 +496,5 @@ namespace FlockingSystem.ECS
                 _entityManager.SetComponentData(entity, value);
             }
         }
-
     }
 }

@@ -6,7 +6,9 @@ namespace EnemySystem
         None,
         Damage,
         Forced,
-        Consumed
+        Consumed,
+        PlayerContact,
+        ParentDied
     }
 
     /// <summary>敌人死亡时是否参与奖励和击杀统计。</summary>
@@ -31,5 +33,12 @@ namespace EnemySystem
         Turning,
         Charging,
         Dashing
+    }
+
+    /// <summary>Boss 的单向战斗阶段。</summary>
+    public enum EnemyBossPhase
+    {
+        First,
+        Second
     }
 }

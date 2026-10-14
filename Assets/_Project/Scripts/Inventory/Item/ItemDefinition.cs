@@ -33,11 +33,11 @@ public class ItemDefinition : ScriptableObject
     /// <summary>获取物品定义的稳定标识。</summary>
     public string Id => id;
 
-    /// <summary>获取物品在界面中显示的名称。</summary>
-    public string DisplayName => displayName;
+    /// <summary>通过稳定物品编号读取当前语言名称；临时定义使用原始名称。</summary>
+    public string DisplayName => L10n.GetOrDefault($"item.{id}.name", displayName);
 
-    /// <summary>获取物品的描述文本。</summary>
-    public string Description => description;
+    /// <summary>读取当前语言物品描述，不改变战斗配置和存档标识。</summary>
+    public string Description => L10n.GetOrDefault($"item.{id}.description", description);
 
     /// <summary>获取物品图标。</summary>
     public Sprite Icon => icon;

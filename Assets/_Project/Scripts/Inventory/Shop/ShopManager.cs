@@ -1,4 +1,5 @@
 using Services;
+using System.Collections.Generic;
 using UnityEngine;
 using VContainer;
 
@@ -6,13 +7,17 @@ namespace InventorySystem.Shop
 {
     /// <summary>
     /// 商店服务(DDOL 场景组件,挂在 ScopeContainer 下,注册为 IShopService):
-    /// - RefreshShop:进入 UIScene 时清空商店网格,按面积权重重新填充商品。
+    /// - RefreshShop:进入 UIScene 时免费生成商店；手动刷新先完整准备，再扣积分替换。
     /// - TryPurchase:从商店购买(扣除永久 Points)。积分不足返回 false,由拖放流程回滚。
     /// - Refund:将商品放回商店并退还购买价格。
-    /// 积分统一走 IPointsService(ResourceManager),是本项目唯一货币。
+    /// 积分统一走 IPointsService，购买和退款提示从当前语言翻译表读取。
     /// </summary>
     public class ShopManager : MonoBehaviour, IShopService
     {
+        public const int RefreshCost = 1000;
+        private bool _isRefreshing;
+        /// <summary>生成和提交期间禁止重复刷新。</summary>
+        public bool IsRefreshing => _isRefreshing;
         [Inject] private IPointsService _points;
         [Inject] private ItemCatalog _catalog;
         [Inject] private IUINotificationService _notify;
@@ -32,12 +37,12 @@ namespace InventorySystem.Shop
 
             if (!_points.HasEnoughPoints(price))
             {
-                _notify?.ShowNotification($"积分不足,无法购买(需要 {price})", NotificationKind.Warning);
+                _notify?.ShowNotification(L10n.Get("shop.insufficientPoints", price), NotificationKind.Warning);
                 return false;
             }
 
             _points.SpendPoints(price, "商店购买");
-            _notify?.ShowNotification($"购买成功,花费 {price} 积分", NotificationKind.Success);
+            _notify?.ShowNotification(L10n.Get("shop.purchased", price), NotificationKind.Success);
             return true;
         }
 
@@ -49,53 +54,67 @@ namespace InventorySystem.Shop
                 return;
 
             _points.AddPoints(price, "商店退款");
-            _notify?.ShowNotification($"已退款 {price} 积分", NotificationKind.Success);
+            _notify?.ShowNotification(L10n.Get("shop.refunded", price), NotificationKind.Success);
         }
 
-        /// <summary>进入 UIScene 时调用:清空商店网格,随即填充商品直至填满。</summary>
+        /// <summary>进入 UIScene 时免费刷新，准备失败保留已有商品。</summary>
         public void RefreshShop(GridView shopGrid)
         {
-            if (shopGrid == null)
+            if (shopGrid != null && !_isRefreshing)
             {
-                Debug.LogWarning("[ShopManager] RefreshShop: shopGrid 为空", this);
-                return;
+                Refresh(shopGrid, 0);
             }
-
-            shopGrid.EnsureGridVM();
-            shopGrid.ClearAll();
-            FillShop(shopGrid);
         }
 
-        /// <summary>按 ItemCatalog 中的面积权重生成不重叠的包围盒。</summary>
-        private void FillShop(GridView grid)
+        /// <summary>手动刷新消费永久积分，拖拽、余额不足或处理中均拒绝。</summary>
+        public bool TryRefreshShop(GridView grid, IInventoryDragState dragState)
+        {
+            return grid != null && grid.GridType == GridType.Shop && dragState != null &&
+                dragState.DraggingItem == null && !_isRefreshing &&
+                _points != null && _points.HasEnoughPoints(RefreshCost) && Refresh(grid, RefreshCost);
+        }
+
+        /// <summary>按目录权重生成并验证布局，完整视图准备成功后才授权扣费及替换。</summary>
+        private bool Refresh(GridView grid, int cost)
         {
             if (_catalog == null || _catalog.Items == null || _catalog.Items.Count == 0)
             {
-                Debug.LogWarning("[ShopManager] ItemCatalog 为空,无法填充商店", this);
-                return;
+                return false;
             }
 
-            int attemptLimit = Mathf.Max(1, fillPassLimit) * Mathf.Max(1, _catalog.Items.Count);
-            var generator = new ShopPlacementGenerator();
-            var placements = generator.Generate(
-                _catalog.Items,
-                grid.ShapeSet,
-                grid.GridVM.Width,
-                grid.GridVM.Height,
-                _catalog.GetShopAreaWeight,
-                attemptLimit);
-
-            for (int i = 0; i < placements.Count; i++)
+            _isRefreshing = true;
+            try
             {
-                var placement = placements[i];
-                var item = new ItemVM(placement.Definition, grid.ShapeSet);
-                item.SetDirection(placement.Direction);
-                if (grid.SpawnItem(item, placement.Column, placement.Row) == null)
+                grid.EnsureGridVM();
+                int attemptLimit = Mathf.Max(1, fillPassLimit) * Mathf.Max(1, _catalog.Items.Count);
+                var generator = new ShopPlacementGenerator();
+                var placements = generator.Generate(
+                    _catalog.Items,
+                    grid.ShapeSet,
+                    grid.GridVM.Width,
+                    grid.GridVM.Height,
+                    _catalog.GetShopAreaWeight,
+                    attemptLimit);
+
+                var validation = new GridVM(grid.GridVM.Width, grid.GridVM.Height, GridType.Shop);
+                var snapshots = new List<InventoryItemSnapshot>(placements.Count);
+                for (int i = 0; i < placements.Count; i++)
                 {
-                    Debug.LogWarning(
-                        $"[ShopManager] 商店生成失败: {placement.Definition?.name} ({placement.Column},{placement.Row})",
-                        this);
+                    var placement = placements[i];
+                    var item = new ItemVM(placement.Definition, grid.ShapeSet);
+                    item.SetDirection(placement.Direction);
+                    if (!validation.Place(item, placement.Column, placement.Row))
+                    {
+                        return false;
+                    }
+                    snapshots.Add(new InventoryItemSnapshot(item));
                 }
+                return grid.TryReplaceItems(snapshots,
+                    () => cost == 0 || _points.SpendPoints(cost, "商店刷新"));
+            }
+            finally
+            {
+                _isRefreshing = false;
             }
         }
     }

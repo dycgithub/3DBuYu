@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using CombatSystem;
 using EffectSystem;
 using Interfaces;
@@ -53,33 +54,40 @@ namespace EnemySystem.Components
             }
         }
 
-        /// <summary>对范围内敌人和玩家造成一次爆炸伤害。</summary>
+        /// <summary>吞噬或父代死亡不引爆，其余死亡对范围内敌人和玩家造成伤害。</summary>
         /// <param name="enemy">触发死亡事件的敌人。</param>
+        /// <returns>无。</returns>
         private void HandleDeath(Enemy enemy)
         {
-            if (enemy == null || enemy.DeathCause == EnemyDeathCause.Consumed)
+            if (enemy == null ||
+                enemy.DeathCause == EnemyDeathCause.Consumed ||
+                enemy.DeathCause == EnemyDeathCause.ParentDied)
             {
                 return;
             }
 
             EnemyAttributesSO attributes = enemy.Attributes;
             float radius = attributes != null ? Mathf.Max(0f, attributes.explosionRadius) : 0f;
+            EnemyHealthComponent health = enemy.GetComponent<EnemyHealthComponent>();
+            float attackDamageMultiplier = health != null
+                ? health.DeathAttackDamageMultiplier
+                : 1f;
             float damage = attributes != null
-                ? Mathf.Max(0f, attributes.explosionDamage) * enemy.GetAttackDamageMultiplier()
+                ? Mathf.Max(0f, attributes.explosionDamage) * attackDamageMultiplier
                 : 0f;
             if (radius > 0f && damage > 0f)
             {
                 if (_spatialService != null)
                 {
-                    var targets = _spatialService.QueryRadius(
+                    List<IDamageable> targetSnapshot = new(_spatialService.QueryRadius(
                         transform.position,
                         radius,
-                        SpatialIndexing.SpatialLayers.Enemy);
-                    for (int index = 0; index < targets.Count; index++)
+                        SpatialIndexing.SpatialLayers.Enemy));
+                    for (int index = 0; index < targetSnapshot.Count; index++)
                     {
-                        if (targets[index] is not Enemy targetEnemy || targetEnemy != enemy)
+                        if (targetSnapshot[index] is not Enemy targetEnemy || targetEnemy != enemy)
                         {
-                            ApplyDamage(targets[index], damage);
+                            ApplyDamage(targetSnapshot[index], damage);
                         }
                     }
                 }

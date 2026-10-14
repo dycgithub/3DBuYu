@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// 网格数据(VM,纯逻辑):维护 列×行 的占用二维数组。
+/// 网格数据(VM,纯逻辑):维护 列×行 的占用二维数组和成功放置顺序。
 /// 边界检查 / 占用检查 / 放置 / 移除都在这里,不依赖任何 UI。
 /// </summary>
 public class GridVM
@@ -13,12 +13,15 @@ public class GridVM
 
     private readonly ItemVM[,] _cells; // [列, 行]
     private readonly HashSet<ItemVM> _occupants = new(); // 占用物品去重集合
+    private readonly List<ItemVM> _orderedOccupants = new(); // 成功放置顺序
+    private readonly Dictionary<ItemVM, long> _placementOrder = new(); // 拖拽回滚后仍保持的放置序号
+    private long _nextPlacementOrder;
 
     /// <summary>网格内物品数量(去重:一个物品占多格只计一次)。</summary>
-    public int ItemCount => _occupants.Count;
+    public int ItemCount => _orderedOccupants.Count;
 
-    /// <summary>网格内全部物品(去重,遍历顺序不定)。</summary>
-    public IEnumerable<ItemVM> Items => _occupants;
+    /// <summary>网格内全部物品(去重,按成功放置顺序排列)。</summary>
+    public IEnumerable<ItemVM> Items => _orderedOccupants;
 
     /// <summary>按 (列, 行) 查询格子,返回占用它的物品(null=空)。</summary>
     public ItemVM this[int col, int row] => _cells[col, row];
@@ -58,7 +61,8 @@ public class GridVM
         {
             int x = posX + p.x + item.RotationOffset.x;
             int y = posY + p.y + item.RotationOffset.y;
-            if (_cells[x, y] != null)
+            ItemVM occupant = _cells[x, y];
+            if (occupant != null && occupant != item)
             {
                 return false;
             }
@@ -75,6 +79,7 @@ public class GridVM
             return false;
         }
 
+        ClearCells(item);
         item.LocalGridCoordinate = new Vector2Int(posX, posY);
         foreach (var p in item.CoordinateSet)
         {
@@ -83,7 +88,16 @@ public class GridVM
             _cells[x, y] = item;
         }
 
-        _occupants.Add(item);
+        if (_occupants.Add(item))
+        {
+            if (!_placementOrder.TryGetValue(item, out long order))
+            {
+                order = ++_nextPlacementOrder;
+                _placementOrder.Add(item, order);
+            }
+
+            InsertInPlacementOrder(item, order);
+        }
         return true;
     }
 
@@ -95,6 +109,66 @@ public class GridVM
             return;
         }
 
+        ClearCells(item);
+        _occupants.Remove(item);
+        _orderedOccupants.Remove(item);
+        _placementOrder.Remove(item);
+    }
+
+    /// <summary>暂时清空占用格；发射器背包保留顺序，供拖拽失败时原样回滚。</summary>
+    /// <param name="item">当前正在拖拽的物品。</param>
+    /// <returns>物品属于当前网格时返回 true。</returns>
+    internal bool SuspendPlacement(ItemVM item)
+    {
+        if (item == null || !_occupants.Contains(item))
+        {
+            return false;
+        }
+
+        if (!_placementOrder.ContainsKey(item))
+        {
+            return false;
+        }
+
+        int previousOrder = _orderedOccupants.IndexOf(item);
+        if (previousOrder < 0)
+        {
+            return false;
+        }
+
+        _occupants.Remove(item);
+        _orderedOccupants.RemoveAt(previousOrder);
+        return true;
+    }
+
+    /// <summary>检查物品是否处于可回滚的拖拽暂停状态。</summary>
+    /// <param name="item">待检查的物品。</param>
+    /// <returns>网格仍保存该物品的原顺序时返回 true。</returns>
+    internal bool IsSuspended(ItemVM item)
+    {
+        return item != null && _placementOrder.ContainsKey(item) && !_occupants.Contains(item);
+    }
+
+    /// <summary>清空网格数据及尚未结束的拖拽事务。</summary>
+    internal void Clear()
+    {
+        for (int x = 0; x < Width; x++)
+        {
+            for (int y = 0; y < Height; y++)
+            {
+                _cells[x, y] = null;
+            }
+        }
+
+        _occupants.Clear();
+        _orderedOccupants.Clear();
+        _placementOrder.Clear();
+    }
+
+    /// <summary>清空物品在占用数组中的所有格子。</summary>
+    /// <param name="item">要清空的网格物品。</param>
+    private void ClearCells(ItemVM item)
+    {
         for (int x = 0; x < Width; x++)
         {
             for (int y = 0; y < Height; y++)
@@ -105,8 +179,24 @@ public class GridVM
                 }
             }
         }
+    }
 
-        _occupants.Remove(item);
+    /// <summary>按物品稳定的放置序号插入当前网格集合。</summary>
+    /// <param name="item">要登记的物品。</param>
+    /// <param name="order">该物品的放置序号。</param>
+    private void InsertInPlacementOrder(ItemVM item, long order)
+    {
+        int insertIndex = _orderedOccupants.Count;
+        for (int index = 0; index < _orderedOccupants.Count; index++)
+        {
+            if (_placementOrder[_orderedOccupants[index]] > order)
+            {
+                insertIndex = index;
+                break;
+            }
+        }
+
+        _orderedOccupants.Insert(insertIndex, item);
     }
 
     /// <summary>查询某个格子被哪个物品占用(等价于索引器,语义更直白)。</summary>

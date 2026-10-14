@@ -1,38 +1,55 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using CombatSystem;
 using UnityEngine;
 
 namespace GameSystem
 {
     /// <summary>
     /// 存档系统。
-    /// 管理资源、设置、输入覆盖、通行证和玩家等级的持久化。
+    /// 管理资源、设置和输入覆盖的持久化；Windows 发布版的存档随游戏目录移动。
     /// </summary>
     public static class SaveSystem
     {
         private const string ResourceDataFileName = "resourcedata.json";
-        private const string BattlePassDataFileName = "battlepass.json";
-        private const string PlayerLevelDataFileName = "playerlevel.json";
         private const string SettingsFileName = "settings.json";
         private const string InputOverridesFileName = "inputoverrides.json";
 
         /// <summary>
-        /// 获取并创建存档目录。
+        /// 获取并创建当前平台的存档目录；目录不可写时不回退到其他位置。
         /// </summary>
         /// <returns>当前平台使用的存档目录路径。</returns>
         private static string GetSaveDirectoryPath()
         {
-            string path = Application.persistentDataPath;
-#if UNITY_EDITOR
-            path = Path.Combine(Application.dataPath, "../SaveData");
-#endif
+            string path = ResolveSaveDirectory(
+                Application.dataPath, Application.persistentDataPath, Application.platform);
             if (!Directory.Exists(path))
             {
                 Directory.CreateDirectory(path);
             }
 
             return path;
+        }
+
+        /// <summary>编辑器与 Windows 使用数据目录旁的 SaveData，其他平台使用持久化目录。</summary>
+        /// <param name="dataPath">Unity 资产或发布版数据目录的绝对路径。</param>
+        /// <param name="persistentPath">平台默认的持久化目录。</param>
+        /// <param name="platform">当前运行平台。</param>
+        /// <returns>不依赖启动工作目录的存档路径。</returns>
+        private static string ResolveSaveDirectory(
+            string dataPath, string persistentPath, RuntimePlatform platform)
+        {
+            switch (platform)
+            {
+                case RuntimePlatform.WindowsPlayer:
+                case RuntimePlatform.WindowsEditor:
+                case RuntimePlatform.OSXEditor:
+                case RuntimePlatform.LinuxEditor:
+                    return Path.Combine(Path.GetDirectoryName(dataPath), "SaveData");
+                default:
+                    return persistentPath;
+            }
         }
 
         /// <summary>
@@ -61,46 +78,6 @@ namespace GameSystem
         public static ResourceSaveData LoadResourceData()
         {
             return ReadJsonFile<ResourceSaveData>(ResourceDataFileName);
-        }
-
-        #endregion
-
-        #region 通行证存档
-
-        /// <summary>
-        /// 保存通行证进度。
-        /// </summary>
-        public static void SaveBattlePassData(BattlePassSaveData data)
-        {
-            WriteJsonFile(BattlePassDataFileName, data);
-        }
-
-        /// <summary>
-        /// 加载通行证进度。文件不存在或字段不兼容时返回 null。
-        /// </summary>
-        public static BattlePassSaveData LoadBattlePassData()
-        {
-            return ReadJsonFile<BattlePassSaveData>(BattlePassDataFileName);
-        }
-
-        #endregion
-
-        #region 玩家等级存档
-
-        /// <summary>
-        /// 保存玩家等级数据。
-        /// </summary>
-        public static void SavePlayerLevelData(PlayerLevelSaveData data)
-        {
-            WriteJsonFile(PlayerLevelDataFileName, data);
-        }
-
-        /// <summary>
-        /// 加载玩家等级数据。
-        /// </summary>
-        public static PlayerLevelSaveData LoadPlayerLevelData()
-        {
-            return ReadJsonFile<PlayerLevelSaveData>(PlayerLevelDataFileName);
         }
 
         #endregion
@@ -182,8 +159,56 @@ namespace GameSystem
 
         #region 工具方法
 
+        /// <summary>先写完同目录临时文件，再将其原子提交到目标路径。</summary>
+        /// <param name="filePath">目标 JSON 文件的完整路径。</param>
+        /// <param name="json">待写入的 JSON 文本。</param>
+        /// <param name="writeTemporaryFile">写入临时文件的操作。</param>
+        /// <param name="commitTemporaryFile">提交临时文件的操作。</param>
+        private static void WriteJsonAtomically(
+            string filePath,
+            string json,
+            Action<string, string> writeTemporaryFile,
+            Action<string, string> commitTemporaryFile)
+        {
+            string temporaryFilePath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
+            try
+            {
+                writeTemporaryFile(temporaryFilePath, json);
+                commitTemporaryFile(temporaryFilePath, filePath);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(temporaryFilePath))
+                    {
+                        File.Delete(temporaryFilePath);
+                    }
+                }
+                catch (Exception)
+                {
+                    // 清理异常不能覆盖写入或提交时的原始异常。
+                }
+            }
+        }
+
+        /// <summary>根据目标文件是否存在，将临时文件替换或移动为正式存档。</summary>
+        /// <param name="temporaryFilePath">已完整写入并关闭的临时文件路径。</param>
+        /// <param name="destinationFilePath">正式存档的完整路径。</param>
+        private static void CommitTemporaryFile(string temporaryFilePath, string destinationFilePath)
+        {
+            if (File.Exists(destinationFilePath))
+            {
+                File.Replace(temporaryFilePath, destinationFilePath, null);
+                return;
+            }
+
+            File.Move(temporaryFilePath, destinationFilePath);
+        }
+
         /// <summary>
-        /// 将对象序列化为 JSON 文件。
+        /// 将对象序列化为 JSON 并原子写入存档文件。
         /// </summary>
         /// <param name="fileName">存档文件名。</param>
         /// <param name="data">要写入的存档对象。</param>
@@ -192,7 +217,7 @@ namespace GameSystem
             try
             {
                 string json = JsonUtility.ToJson(data, true);
-                File.WriteAllText(GetSaveFilePath(fileName), json);
+                WriteJsonAtomically(GetSaveFilePath(fileName), json, File.WriteAllText, CommitTemporaryFile);
             }
             catch (Exception e)
             {
@@ -228,11 +253,14 @@ namespace GameSystem
     }
 
     /// <summary>
-    /// 设置数据。
+    /// 跨启动保存音频、显示、输入和语言设置；缺少语言字段时默认英文。
     /// </summary>
     [Serializable]
     public class SettingsData
     {
+        /// <summary>玩家选择的语言代码；首次启动不跟随系统语言。</summary>
+        public string languageCode = "en";
+
         public float masterVolume = 1f;
         public float bgmVolume = 0.8f;
         public float sfxVolume = 1f;
@@ -246,7 +274,8 @@ namespace GameSystem
         public bool invertY;
         public bool showFPS;
         public bool showCombatRangeVisuals = true;
-        public KeyCode pauseKey = KeyCode.Escape;
+        /// <summary>用户选择的发射器攻击输入模式。</summary>
+        public TransmitterAttackMode attackMode = TransmitterAttackMode.Automatic;
     }
 
     [Serializable]
@@ -257,8 +286,5 @@ namespace GameSystem
 
         /// <summary>按固定输入动作顺序保存的主绑定覆盖路径。</summary>
         public List<string> bindingOverridePaths = new();
-
-        /// <summary>按固定输入动作顺序保存的备用绑定覆盖路径。</summary>
-        public List<string> secondaryBindingOverridePaths = new();
     }
 }

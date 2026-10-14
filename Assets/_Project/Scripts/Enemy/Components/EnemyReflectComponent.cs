@@ -151,9 +151,10 @@ namespace EnemySystem.Components
             ResetPendingHits();
         }
 
-        /// <summary>对象池归还时清理状态。</summary>
+        /// <summary>对象池归还时幂等退订命中事件并清理待处理命中状态。</summary>
         public void OnReturnToPool()
         {
+            Unsubscribe();
             ResetPendingHits();
         }
 

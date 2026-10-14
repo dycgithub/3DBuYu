@@ -8,7 +8,8 @@ using VContainer;
 using VContainer.Unity;
 
 [RequireComponent(typeof(GridInteract))]
-public class GridView : MonoBehaviour
+/// <summary>同步网格占位与物品视图；整店替换在独立部分中先准备后提交。</summary>
+public partial class GridView : MonoBehaviour
 {
     private static readonly List<GridView> _activeGrids = new();
 
@@ -90,6 +91,7 @@ public class GridView : MonoBehaviour
     [Inject] private IObjectResolver _resolver;
     [Inject] private IShopService _shop;
     [Inject] private IInventoryTransferStorage _inventoryTransferStorage;
+    [Inject] private IInventoryDragState _inventory;
 
     private void OnEnable()
     {
@@ -255,6 +257,7 @@ public class GridView : MonoBehaviour
 
         if (view.OwnerGrid != this)
         {
+            view.OwnerGrid?.GridVM?.Remove(view.ItemVM);
             view.transform.SetParent(itemContainer, false);
             view.Rect.sizeDelta = SizeFor(view.ItemVM);
             view.SetOwner(this);
@@ -366,16 +369,40 @@ public class GridView : MonoBehaviour
     /// </summary>
     public void ClearAll()
     {
-        if (GridVM == null) return;
+        if (GridVM == null)
+        {
+            return;
+        }
+
+        ItemView[] views = itemContainer != null
+            ? itemContainer.GetComponentsInChildren<ItemView>(true)
+            : Array.Empty<ItemView>();
+
+        ItemView draggingItem = _inventory?.DraggingItem;
+        if (draggingItem != null && draggingItem.IsDraggingOver(this))
+        {
+            draggingItem.CancelDragForGridClear();
+        }
+
+        for (int index = 0; index < views.Length; index++)
+        {
+            views[index].CancelDragForGridClear();
+        }
 
         var all = new List<ItemVM>(GridVM.Items);
-        foreach (var item in all) GridVM.Remove(item);
+        foreach (ItemVM item in all)
+        {
+            GridVM.Remove(item);
+        }
+
+        GridVM.Clear();
 
         if (itemContainer != null)
         {
-            var views = itemContainer.GetComponentsInChildren<ItemView>();
             for (int i = 0; i < views.Length; i++)
+            {
                 Destroy(views[i].gameObject);
+            }
         }
 
         ItemsChanged?.Invoke(this);
@@ -405,23 +432,38 @@ public class GridView : MonoBehaviour
     /// <summary>通知绑定装备重新读取当前网格内容。</summary>
     public void NotifyItemsChanged() => ItemsChanged?.Invoke(this);
 
-    /// <summary>暂时从数据网格移除物品，供拖拽回退或跨网格放置使用。</summary>
+    /// <summary>从数据网格暂时移除物品，并在拖拽事务完成前保留其装备顺序。</summary>
     public bool DetachItem(ItemVM item)
     {
         return DetachItem(item, true);
     }
 
     /// <summary>
-    /// 从数据网格移除物品，并允许拖拽事务延迟最终同步。
+    /// 暂停或移除物品；拖拽事务暂停时保留顺序，失败回滚后恢复原位。
     /// </summary>
+    /// <param name="item">要从网格移出的物品。</param>
+    /// <param name="notifyItemsChanged">是否立即通知装备同步。</param>
+    /// <returns>物品属于该网格时返回 true。</returns>
     public bool DetachItem(ItemVM item, bool notifyItemsChanged)
     {
         if (GridVM == null || item == null || !GridVM.Contains(item))
+        {
             return false;
+        }
 
-        GridVM.Remove(item);
         if (notifyItemsChanged)
+        {
+            GridVM.Remove(item);
+        }
+        else
+        {
+            GridVM.SuspendPlacement(item);
+        }
+
+        if (notifyItemsChanged)
+        {
             ItemsChanged?.Invoke(this);
+        }
         return true;
     }
 }

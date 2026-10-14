@@ -4,11 +4,13 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using VContainer;
+using UnityEngine.Localization;
+using UnityEngine.Localization.Settings;
 
 namespace _Project.UI.RunResult.View
 {
     /// <summary>
-    /// 使用 UGUI 显示单局结算，并根据 GameManager 状态控制面板交互。
+    /// 使用当前语言显示单局结算，语言刷新不重新结算或重置返回状态。
     /// </summary>
     [RequireComponent(typeof(CanvasGroup))]
     public sealed class RunResultPanel : MonoBehaviour
@@ -49,6 +51,7 @@ namespace _Project.UI.RunResult.View
         {
             ResolveReferences();
             _returnButton?.onClick.AddListener(ReturnToBase);
+            LocalizationSettings.SelectedLocaleChanged += RefreshLanguage;
 
             if (!HasReferences())
             {
@@ -75,6 +78,7 @@ namespace _Project.UI.RunResult.View
         private void OnDestroy()
         {
             _returnButton?.onClick.RemoveListener(ReturnToBase);
+            LocalizationSettings.SelectedLocaleChanged -= RefreshLanguage;
 
             if (_eventsSubscribed && _gameManager != null)
             {
@@ -126,29 +130,46 @@ namespace _Project.UI.RunResult.View
             bool isVictory = outcome == ResultOutcome.Victory;
             int reward = isVictory ? Mathf.Max(0, _gameManager.VictoryReward) : 0;
 
-            _eyebrowLabel.text = "RUN COMPLETE";
-            _titleLabel.text = isVictory ? "战斗胜利" : "战斗失败";
-            _subtitleLabel.text = isVictory
-                ? "核心稳定，已完成本局挑战"
-                : "能量耗尽，本局未满足胜利条件";
-            _difficultyLabel.text = $"难度  {difficulty?.DifficultyId ?? "未知"}";
-            _elapsedTimeLabel.text = $"生存时间  {FormatTime(session?.ElapsedTime ?? 0f)}";
-            _killCountLabel.text = $"击杀数量  {killCount}";
-            _bestStreakLabel.text = $"最高连杀  {bestStreak}";
+            _eyebrowLabel.text = L10n.Get("ui.runComplete");
+            _titleLabel.text = L10n.Get(isVictory ? "result.victory" : "result.defeat");
+            _subtitleLabel.text = L10n.Get(isVictory ? "result.victorySubtitle" : "result.defeatSubtitle");
+            string difficultyName = difficulty != null
+                ? L10n.GetOrDefault($"difficulty.{difficulty.DifficultyId}", difficulty.DifficultyId)
+                : L10n.Get("result.unknown");
+            _difficultyLabel.text = L10n.Get("result.difficulty", difficultyName);
+            _elapsedTimeLabel.text = L10n.Get("result.time", FormatTime(session?.ElapsedTime ?? 0f));
+            _killCountLabel.text = L10n.Get("result.kills", killCount);
+            _bestStreakLabel.text = L10n.Get("result.streak", bestStreak);
             _sessionPointsLabel.text =
-                $"本局积分  {basePoints} + {overtimePoints} = {normalizedPoints}";
+                L10n.Get("result.points", basePoints, overtimePoints, normalizedPoints);
             _settlementMultiplierLabel.text =
-                $"结算倍率  {multiplier:0.##} · 超时倍率  {overtimeMultiplier:0.##}";
+                L10n.Get("result.multiplier", multiplier, overtimeMultiplier);
             _settlementFormulaLabel.text =
                 $"floor({basePoints} × {multiplier:0.##} + " +
                 $"{overtimePoints} × {overtimeMultiplier:0.##}) = {reward}";
-            _failureRewardLabel.text = "本局积分未结算\n返回基地后可重新开始挑战";
+            _failureRewardLabel.text = L10n.Get("result.failureReward");
 
             _victoryContent.SetActive(isVictory);
             _failureContent.SetActive(!isVictory);
             _failureRewardLabel.gameObject.SetActive(!isVictory);
             _isReturning = false;
             _returnButton.interactable = true;
+        }
+
+        /// <summary>只更新已结算战局的译文，并保留正在返回的按钮状态。</summary>
+        private void RefreshLanguage(Locale _)
+        {
+            if (_gameManager == null || !HasReferences() ||
+                _gameManager.CurrentState is not (GameState.Settled or GameState.Failed))
+            {
+                return;
+            }
+
+            bool returning = _isReturning;
+            Refresh(_gameManager.CurrentState == GameState.Settled ? ResultOutcome.Victory : ResultOutcome.Defeat,
+                _gameManager.SessionPoints);
+            _isReturning = returning;
+            _returnButton.interactable = !returning;
         }
 
         /// <summary>
