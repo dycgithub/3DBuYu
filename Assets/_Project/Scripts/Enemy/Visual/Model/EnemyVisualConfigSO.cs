@@ -4,7 +4,7 @@ namespace EnemySystem.Visual
 {
     /// <summary>
     /// 敌人视觉参数资产。
-    /// <para>材质保持共享，受击和死亡过程由 ECS 实例数据驱动。</para>
+    /// <para>基础颜色来自类型材质；裂纹、发光和反馈时长由 ECS 实例状态使用。</para>
     /// </summary>
     [CreateAssetMenu(fileName = "EnemyVisualConfig", menuName = "Enemy/Visual Config")]
     public sealed class EnemyVisualConfigSO : ScriptableObject
@@ -13,7 +13,6 @@ namespace EnemySystem.Visual
         public EnemyVisualTier tier = EnemyVisualTier.Normal;
 
         [Header("颜色")]
-        public Color baseColor = Color.white;
         public Color crackColor = new(1f, 0.25f, 0.05f, 1f);
         public Color emissionColor = new(1f, 0.05f, 0.01f, 1f);
 

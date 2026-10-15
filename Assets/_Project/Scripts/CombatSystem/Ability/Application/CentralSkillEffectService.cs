@@ -12,6 +12,8 @@ namespace CombatSystem
     /// </summary>
     public sealed class CentralSkillEffectService : ICentralSkillEffectService, ICentralSkillEffectResetService
     {
+        private const float FocusedAttackDamageMultiplier = 2f;
+
         private readonly CentralCore _centralCore;
         private readonly ITransmitterGlobalEffectService _transmitterEffects;
         private readonly IBuffService _buffService;
@@ -180,7 +182,7 @@ namespace CombatSystem
             return affectedCount;
         }
 
-        /// <summary>在目标快照中选择生命值最高的敌人并提交限时集火状态。</summary>
+        /// <summary>选择生命值最高的敌人集火，并在相同时限内翻倍发射器攻击伤害。</summary>
         public bool TryFocusHighestHealth(
             IReadOnlyList<IDamageable> targets,
             float durationSeconds,
@@ -214,6 +216,10 @@ namespace CombatSystem
                 highestHealthEnemy,
                 durationSeconds,
                 sourceInstanceId);
+            _transmitterEffects.SetAttackDamageMultiplier(
+                FocusedAttackDamageMultiplier,
+                sourceInstanceId,
+                durationSeconds);
             return true;
         }
 

@@ -9,7 +9,7 @@ using VContainer.Unity;
 namespace CombatSystem
 {
     /// <summary>
-    /// 驱动投射物移动、碰撞和回收；整卡发射先准备完整批次，再发布活动状态。
+    /// 驱动投射物移动、碰撞和回收；活动状态发布时同步激活已配置的视觉。
     /// </summary>
     public sealed partial class ProjectileSimulationService : ITickable, IDisposable, IProjectileHitEventSource
     {
@@ -113,7 +113,7 @@ namespace CombatSystem
                 ProjectileState projectile = SpawnSingleProjectile(in launchData);
                 if (projectile != null)
                 {
-                    _activeProjectiles.Add(projectile);
+                    RegisterProjectile(projectile);
                 }
             }
             PublishSpatialSnapshot();
@@ -143,7 +143,7 @@ namespace CombatSystem
                 return false;
             }
 
-            _activeProjectiles.Add(firstProjectile);
+            RegisterProjectile(firstProjectile);
             float attackInterval = 1f / Mathf.Max(0.001f, projectileData.AttacksPerSecond);
             _pendingEmissions.Add(new PendingProjectileEmission(
                 template,
@@ -172,7 +172,7 @@ namespace CombatSystem
                     ProjectileState projectile = SpawnSingleProjectile(in launchData);
                     if (projectile != null)
                     {
-                        _activeProjectiles.Add(projectile);
+                        RegisterProjectile(projectile);
                     }
 
                     emission.NextProjectileIndex++;
@@ -357,7 +357,10 @@ namespace CombatSystem
                 _activeProjectiles.RemoveAt(index);
             }
 
-            _activeProjectiles.AddRange(_pendingProjectiles);
+            for (int index = 0; index < _pendingProjectiles.Count; index++)
+            {
+                RegisterProjectile(_pendingProjectiles[index]);
+            }
             _pendingProjectiles.Clear();
             AdvancePendingEmissions(deltaTime);
             PublishSpatialSnapshot();
@@ -368,6 +371,14 @@ namespace CombatSystem
         {
             using var profilerScope = PublishSpatialSnapshotMarker.Auto();
             _projectileSnapshotPublisher?.PublishProjectiles(_activeProjectiles);
+        }
+
+        /// <summary>将已完整准备的投射物加入活动列表并激活其可选视图。</summary>
+        /// <param name="projectile">已完成位置、方向与视觉配置的投射物状态。</param>
+        private void RegisterProjectile(ProjectileState projectile)
+        {
+            _activeProjectiles.Add(projectile);
+            projectile.ViewInstance?.SetActive(true);
         }
 
         /// <summary>释放所有活动投射物和对象池资源。</summary>

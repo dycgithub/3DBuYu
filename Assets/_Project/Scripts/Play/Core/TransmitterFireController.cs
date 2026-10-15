@@ -11,18 +11,36 @@ using VContainer;
 namespace Play
 {
     /// <summary>
-    /// 根据已选择的攻击模式把输入、目标和玩家投射物生成偏移交给集中式攻击服务。
+    /// 根据已选择的攻击模式提交攻击，并在攻击成功后请求对应的菱形魔方转动。
     /// <para>端口的基础攻击数值和子弹配置全部来自对应的 <see cref="TransmitterSO"/>。</para>
-    /// <para>本组件只负责输入采样、目标读取、鼠标瞄准和攻击提交，不保存攻击配置。</para>
+    /// <para>端口转动映射按中央核心配置顺序保存，可在 Inspector 中逐端口修改。</para>
     /// </summary>
     public class TransmitterFireController : MonoBehaviour
     {
+        private const int MaxPuzzlePorts = 8;
+
         private CentralCore _centralCore;
         private PhysicsCentralDetector _detector;
+        private DiamondTwistController _diamondTwist;
         private Transform[] _firePoints;
         private bool _initialized;
         private bool _mouseFireHeld;
         private IDisposable _mouseFireSubscription;
+
+        [Header("Diamond puzzle firing mapping")]
+        [InspectorName("Port Move Mapping (8 ports)")]
+        [Tooltip("CentralBase order: Top, TopRight, Right, BottomRight, Bottom, BottomLeft, Left, TopLeft. Defaults: unlocked Top/Right/Bottom/Left use L'/R'/D'/B'; remaining ports use L/R/D/B.")]
+        [SerializeField] private DiamondTwistMove[] _puzzleMoves =
+        {
+            DiamondTwistMove.LPrime,
+            DiamondTwistMove.L,
+            DiamondTwistMove.RPrime,
+            DiamondTwistMove.R,
+            DiamondTwistMove.DPrime,
+            DiamondTwistMove.D,
+            DiamondTwistMove.BPrime,
+            DiamondTwistMove.B
+        };
 
         [Inject] private ITransmitterAttackService _attackService;
         [Inject] private ITransmitterGlobalEffectService _globalEffects;
@@ -42,6 +60,9 @@ namespace Play
         {
             _centralCore = core;
             _detector = targetDetector;
+            _diamondTwist = _centralCore != null
+                ? _centralCore.GetComponentInChildren<DiamondTwistController>()
+                : null;
 
             int portCount = ports != null ? ports.Count : 0;
             _firePoints = new Transform[portCount];
@@ -191,8 +212,27 @@ namespace Play
                     attackMode == TransmitterAttackMode.Mouse ? mouseTarget : portTarget,
                     port.So.projectileSpawnOffset);
 
-                _attackService?.TryExecuteAttack(in context);
+                if (_attackService != null && _attackService.TryExecuteAttack(in context))
+                {
+                    TriggerPuzzleMove(portIndex);
+                }
             }
+        }
+
+        /// <summary>Queues the Inspector-mapped move once for a successfully submitted port attack.</summary>
+        /// <param name="portIndex">Index of the port in the central configuration.</param>
+        private void TriggerPuzzleMove(int portIndex)
+        {
+            if (_diamondTwist == null ||
+                _puzzleMoves == null ||
+                portIndex < 0 ||
+                portIndex >= MaxPuzzlePorts ||
+                portIndex >= _puzzleMoves.Length)
+            {
+                return;
+            }
+
+            _diamondTwist.RequestTurn(_puzzleMoves[portIndex]);
         }
 
         /// <summary>读取指定端口的自动目标，并优先返回全局聚焦目标。</summary>

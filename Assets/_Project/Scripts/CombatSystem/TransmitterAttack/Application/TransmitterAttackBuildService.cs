@@ -1,7 +1,7 @@
 namespace CombatSystem
 {
     /// <summary>
-    /// 将端口输入和装备修正合并为最终攻击参数，并补齐缺失的默认表现配置。
+    /// 将端口输入和装备修正合并为最终攻击参数，并保留独立视觉覆盖的基础攻击机制。
     /// </summary>
     public sealed class TransmitterAttackBuildService
     {
@@ -19,9 +19,9 @@ namespace CombatSystem
             _globalEffects = globalEffects;
         }
 
-        /// <summary>构建指定端口输入对应的攻击参数。</summary>
+        /// <summary>构建指定端口输入对应的攻击参数及最终投射物配置。</summary>
         /// <param name="input">包含发射器基础值和子弹配置的端口输入。</param>
-        /// <returns>包含所有装备修正的攻击参数；子弹配置为空时保留空引用并由攻击构建器拒绝执行。</returns>
+        /// <returns>包含装备与全局发射器效果修正的攻击参数；子弹配置为空时保留空引用并由攻击构建器拒绝执行。</returns>
         public TransmitterAttackBuild BuildAttackParameters(in TransmitterAttackInput input)
         {
             TransmitterAttackModifiers modifiers = TransmitterAttackModifiers.Default;
@@ -29,21 +29,37 @@ namespace CombatSystem
             modifiers.ClampToValidRanges();
 
             ProjectileProfileSO profile = modifiers.ProjectileProfileOverride ?? input.ProjectileProfile;
+            if (modifiers.ProfileBaseSource == ProjectileProfileBaseSource.EmitterInput
+                && input.ProjectileProfile == null)
+            {
+                profile = null;
+            }
+
             if (profile != null && !ReferenceEquals(profile, input.ProjectileProfile))
             {
-                if (profile.VisualDefinition == null)
+                if (modifiers.ProfileBaseSource == ProjectileProfileBaseSource.EmitterInput)
                 {
-                    profile.VisualDefinition = input.ProjectileProfile?.VisualDefinition;
+                    ProjectileProfileComposer.ApplyInputProfileAsBase(input.ProjectileProfile, profile);
                 }
-
-                if (profile.ImpactSound == null)
+                else
                 {
-                    profile.ImpactSound = input.ProjectileProfile?.ImpactSound;
+                    if (profile.VisualDefinition == null)
+                    {
+                        profile.VisualDefinition = input.ProjectileProfile?.VisualDefinition;
+                    }
+
+                    if (profile.ImpactSound == null)
+                    {
+                        profile.ImpactSound = input.ProjectileProfile?.ImpactSound;
+                    }
                 }
             }
 
             float globalAttackSpeedMultiplier = _globalEffects != null
                 ? UnityEngine.Mathf.Max(0f, _globalEffects.AttackSpeedMultiplier)
+                : 1f;
+            float globalAttackDamageMultiplier = _globalEffects != null
+                ? UnityEngine.Mathf.Max(0f, _globalEffects.AttackDamageMultiplier)
                 : 1f;
             float attacksPerSecond = UnityEngine.Mathf.Max(0.001f, input.AttacksPerSecond)
                 * modifiers.AttackSpeedMultiplier
@@ -58,7 +74,7 @@ namespace CombatSystem
             return new TransmitterAttackBuild(
                 profile,
                 modifiers.AdditiveDamageBonus,
-                modifiers.DamageMultiplier,
+                modifiers.DamageMultiplier * globalAttackDamageMultiplier,
                 modifiers.EnergyCostMultiplier,
                 modifiers.RangeMultiplier,
                 attacksPerSecond,

@@ -113,6 +113,12 @@ namespace _Project.UI.Damage
                     continue;
                 }
 
+                if (entry.View == null)
+                {
+                    Release(index);
+                    continue;
+                }
+
                 float normalizedTime = Mathf.Clamp01((currentTime - entry.StartTime) / duration);
                 if (normalizedTime >= 1f)
                 {
@@ -152,6 +158,7 @@ namespace _Project.UI.Damage
                 return;
             }
 
+            _disposed = true;
             _damageEventSource.DamageApplied -= HandleDamageApplied;
             for (int index = 0; index < _entries.Count; index++)
             {
@@ -165,7 +172,6 @@ namespace _Project.UI.Damage
             _entries.Clear();
             _freeIndices.Clear();
             ClearPoolBucket();
-            _disposed = true;
         }
 
         /// <summary>只消费敌人的实际扣血事件。</summary>
@@ -190,21 +196,28 @@ namespace _Project.UI.Damage
                 IsActive(existingIndex))
             {
                 Entry existing = _entries[existingIndex];
-                float elapsed = currentTime - existing.LastHitTime;
-                if (DamageNumberMath.CanAggregate(
-                    existing.TargetId,
-                    damageEvent.TargetInstanceId,
-                    existing.Priority,
-                    priority,
-                    elapsed,
-                    GetAggregationWindow()))
+                if (existing.View == null)
                 {
-                    existing.Damage += damageEvent.AppliedDamage;
-                    existing.LastHitTime = currentTime;
-                    existing.StartTime = currentTime;
-                    existing.WorldPosition = damageEvent.HitPosition;
-                    existing.View.SetValue(existing.Damage, existing.Priority);
-                    return;
+                    Release(existingIndex);
+                }
+                else
+                {
+                    float elapsed = currentTime - existing.LastHitTime;
+                    if (DamageNumberMath.CanAggregate(
+                        existing.TargetId,
+                        damageEvent.TargetInstanceId,
+                        existing.Priority,
+                        priority,
+                        elapsed,
+                        GetAggregationWindow()))
+                    {
+                        existing.Damage += damageEvent.AppliedDamage;
+                        existing.LastHitTime = currentTime;
+                        existing.StartTime = currentTime;
+                        existing.WorldPosition = damageEvent.HitPosition;
+                        existing.View.SetValue(existing.Damage, existing.Priority);
+                        return;
+                    }
                 }
             }
 
@@ -373,8 +386,13 @@ namespace _Project.UI.Damage
                 _aggregation.Remove(key);
             }
 
-            entry.View.ResetView();
-            _pool.Return(entry.View.gameObject);
+            DamageNumberView view = entry.View;
+            if (view != null)
+            {
+                view.ResetView();
+                _pool.Return(view.gameObject);
+            }
+
             entry.View = null;
             entry.Active = false;
             _freeIndices.Push(index);

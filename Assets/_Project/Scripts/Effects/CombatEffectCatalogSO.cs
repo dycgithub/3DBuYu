@@ -13,6 +13,10 @@ namespace EffectSystem
         [Tooltip("目录特效实例的统一缩放。")]
         [Min(0.01f)] public float Scale = 1f;
         [Min(0f)] public float Lifetime;
+        [Tooltip("飞行类特效的移动速度，单位为世界单位/秒。")]
+        [Min(0.01f)] public float TravelSpeed = 18f;
+        [Tooltip("飞行特效进入此距离后视为抵达。")]
+        [Min(0f)] public float ArrivalDistance = 0.45f;
         [Min(0)] public int PrewarmCount;
         [Min(1)] public int MaximumRetained = 64;
     }
@@ -64,6 +68,8 @@ namespace EffectSystem
                 if (entry.Prefab == null)
                     Debug.LogError($"[CombatEffectCatalogSO] {name} 的 {entry.Id} 未配置预制体。", this);
                 entry.Scale = Mathf.Max(0.01f, entry.Scale);
+                entry.TravelSpeed = Mathf.Max(0.01f, entry.TravelSpeed);
+                entry.ArrivalDistance = Mathf.Max(0f, entry.ArrivalDistance);
                 entry.MaximumRetained = Mathf.Max(1, entry.MaximumRetained);
                 entry.PrewarmCount = Mathf.Clamp(entry.PrewarmCount, 0, entry.MaximumRetained);
             }

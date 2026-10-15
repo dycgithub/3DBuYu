@@ -10,7 +10,7 @@ using UnityEngine.Rendering;
 namespace FlockingSystem.ECS
 {
     /// <summary>
-    /// 管理 Flocking ECS 实例使用的网格、材质和模型局部变换。
+    /// 管理 Flocking ECS 实例使用的网格、调色板材质和模型局部变换。
     /// 视觉资源按源预制体和视觉编号缓存，服务销毁时统一解除 Entities Graphics 注册。
     /// </summary>
     public sealed partial class EnemyFlockRuntimeService
@@ -183,6 +183,7 @@ namespace FlockingSystem.ECS
 
             // 旧材质可能只暴露 _Color；ECS shader 统一使用 _BaseColor。
             material.SetColor("_BaseColor", ReadBaseColor(source));
+            CopyTexture(source, material, "_BaseMap");
             CopyColor(source, material, "_ShadowColor");
             CopyColor(source, material, "_SpecularColor");
             CopyColor(source, material, "_RimColor");
@@ -294,6 +295,20 @@ namespace FlockingSystem.ECS
             }
 
             target.SetColor(property, source.GetColor(property));
+        }
+
+        /// <summary>复制共享调色板及其 UV 变换到 ECS 专用材质。</summary>
+        private static void CopyTexture(Material source, Material target, string property)
+        {
+            if (source == null || target == null ||
+                !source.HasProperty(property) || !target.HasProperty(property))
+            {
+                return;
+            }
+
+            target.SetTexture(property, source.GetTexture(property));
+            target.SetTextureScale(property, source.GetTextureScale(property));
+            target.SetTextureOffset(property, source.GetTextureOffset(property));
         }
 
         private static void CopyFloat(Material source, Material target, string property)

@@ -13,6 +13,7 @@ namespace EffectSystem
         BulletHit,
         BulletExpired,
         EnemySpawn = 9,
-        TransmitterFire = 10
+        TransmitterFire = 10,
+        EnemyReward = 11
     }
 }

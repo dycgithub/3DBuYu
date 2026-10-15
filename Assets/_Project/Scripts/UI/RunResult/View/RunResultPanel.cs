@@ -1,5 +1,4 @@
 using GameSystem;
-using Services;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -22,23 +21,14 @@ namespace _Project.UI.RunResult.View
         }
 
         [SerializeField] private CanvasGroup _group;
-        [SerializeField] private TextMeshProUGUI _eyebrowLabel;
         [SerializeField] private TextMeshProUGUI _titleLabel;
-        [SerializeField] private TextMeshProUGUI _subtitleLabel;
         [SerializeField] private TextMeshProUGUI _difficultyLabel;
         [SerializeField] private TextMeshProUGUI _elapsedTimeLabel;
         [SerializeField] private TextMeshProUGUI _killCountLabel;
-        [SerializeField] private TextMeshProUGUI _bestStreakLabel;
-        [SerializeField] private TextMeshProUGUI _sessionPointsLabel;
-        [SerializeField] private TextMeshProUGUI _settlementMultiplierLabel;
-        [SerializeField] private TextMeshProUGUI _settlementFormulaLabel;
-        [SerializeField] private TextMeshProUGUI _failureRewardLabel;
-        [SerializeField] private GameObject _victoryContent;
-        [SerializeField] private GameObject _failureContent;
+        [SerializeField] private TextMeshProUGUI _rewardLabel;
         [SerializeField] private Button _returnButton;
 
         [Inject] private GameManager _gameManager;
-        [Inject] private IKillStreakService _killStreak;
         [Inject] private SceneLoader _sceneLoader;
 
         private bool _eventsSubscribed;
@@ -90,7 +80,7 @@ namespace _Project.UI.RunResult.View
         /// <summary>
         /// 从 GameManager 结算事件刷新面板。
         /// </summary>
-        private void HandleSettled(bool isVictory, int sessionPoints)
+        private void HandleSettled(bool isVictory, int _)
         {
             if (_gameManager == null || !HasReferences())
             {
@@ -98,7 +88,7 @@ namespace _Project.UI.RunResult.View
             }
 
             ResultOutcome outcome = isVictory ? ResultOutcome.Victory : ResultOutcome.Defeat;
-            Refresh(outcome, sessionPoints);
+            Refresh(outcome);
             ShowPanel();
         }
 
@@ -111,47 +101,25 @@ namespace _Project.UI.RunResult.View
             HidePanel();
         }
 
-        /// <summary>
-        /// 根据胜负结果更新全部结算文本和内容区。
-        /// </summary>
-        private void Refresh(ResultOutcome outcome, int sessionPoints)
+        /// <summary>更新胜负标题、难度/时间/击杀摘要和实际结算奖励。</summary>
+        private void Refresh(ResultOutcome outcome)
         {
             GameSession session = _gameManager.Session;
             DifficultyConfig difficulty = _gameManager.CurrentDifficulty;
-            int normalizedPoints = Mathf.Max(0, sessionPoints);
             int killCount = session != null ? Mathf.Max(0, session.KillCount) : 0;
-            int bestStreak = _killStreak != null
-                ? Mathf.Max(0, _killStreak.BestStreak.CurrentValue)
-                : 0;
-            int basePoints = Mathf.Max(0, _gameManager.BaseSessionPoints);
-            int overtimePoints = Mathf.Max(0, _gameManager.OvertimeSessionPoints);
-            float multiplier = _gameManager.SettlementMultiplier;
-            float overtimeMultiplier = Mathf.Max(1f, _gameManager.OvertimeMultiplier);
             bool isVictory = outcome == ResultOutcome.Victory;
             int reward = isVictory ? Mathf.Max(0, _gameManager.VictoryReward) : 0;
 
-            _eyebrowLabel.text = L10n.Get("ui.runComplete");
             _titleLabel.text = L10n.Get(isVictory ? "result.victory" : "result.defeat");
-            _subtitleLabel.text = L10n.Get(isVictory ? "result.victorySubtitle" : "result.defeatSubtitle");
             string difficultyName = difficulty != null
                 ? L10n.GetOrDefault($"difficulty.{difficulty.DifficultyId}", difficulty.DifficultyId)
                 : L10n.Get("result.unknown");
             _difficultyLabel.text = L10n.Get("result.difficulty", difficultyName);
             _elapsedTimeLabel.text = L10n.Get("result.time", FormatTime(session?.ElapsedTime ?? 0f));
             _killCountLabel.text = L10n.Get("result.kills", killCount);
-            _bestStreakLabel.text = L10n.Get("result.streak", bestStreak);
-            _sessionPointsLabel.text =
-                L10n.Get("result.points", basePoints, overtimePoints, normalizedPoints);
-            _settlementMultiplierLabel.text =
-                L10n.Get("result.multiplier", multiplier, overtimeMultiplier);
-            _settlementFormulaLabel.text =
-                $"floor({basePoints} × {multiplier:0.##} + " +
-                $"{overtimePoints} × {overtimeMultiplier:0.##}) = {reward}";
-            _failureRewardLabel.text = L10n.Get("result.failureReward");
-
-            _victoryContent.SetActive(isVictory);
-            _failureContent.SetActive(!isVictory);
-            _failureRewardLabel.gameObject.SetActive(!isVictory);
+            _rewardLabel.text = isVictory
+                ? L10n.Get("result.points", reward)
+                : L10n.Get("result.failureReward");
             _isReturning = false;
             _returnButton.interactable = true;
         }
@@ -166,8 +134,7 @@ namespace _Project.UI.RunResult.View
             }
 
             bool returning = _isReturning;
-            Refresh(_gameManager.CurrentState == GameState.Settled ? ResultOutcome.Victory : ResultOutcome.Defeat,
-                _gameManager.SessionPoints);
+            Refresh(_gameManager.CurrentState == GameState.Settled ? ResultOutcome.Victory : ResultOutcome.Defeat);
             _isReturning = returning;
             _returnButton.interactable = !returning;
         }
@@ -225,19 +192,11 @@ namespace _Project.UI.RunResult.View
         private void ResolveReferences()
         {
             _group ??= GetComponent<CanvasGroup>();
-            _eyebrowLabel ??= FindText("EyebrowLabel");
             _titleLabel ??= FindText("TitleLabel");
-            _subtitleLabel ??= FindText("SubtitleLabel");
             _difficultyLabel ??= FindText("DifficultyLabel");
             _elapsedTimeLabel ??= FindText("ElapsedTimeLabel");
             _killCountLabel ??= FindText("KillCountLabel");
-            _bestStreakLabel ??= FindText("BestStreakLabel");
-            _sessionPointsLabel ??= FindText("SessionPointsLabel");
-            _settlementMultiplierLabel ??= FindText("SettlementMultiplierLabel");
-            _settlementFormulaLabel ??= FindText("SettlementFormulaLabel");
-            _failureRewardLabel ??= FindText("FailureRewardLabel");
-            _victoryContent ??= FindObject("VictoryContent");
-            _failureContent ??= FindObject("FailureContent");
+            _rewardLabel ??= FindText("RewardLabel");
             _returnButton ??= FindButton("ReturnButton");
         }
 
@@ -247,19 +206,11 @@ namespace _Project.UI.RunResult.View
         private bool HasReferences()
         {
             return _group != null &&
-                   _eyebrowLabel != null &&
                    _titleLabel != null &&
-                   _subtitleLabel != null &&
                    _difficultyLabel != null &&
                    _elapsedTimeLabel != null &&
                    _killCountLabel != null &&
-                   _bestStreakLabel != null &&
-                   _sessionPointsLabel != null &&
-                   _settlementMultiplierLabel != null &&
-                   _settlementFormulaLabel != null &&
-                   _failureRewardLabel != null &&
-                   _victoryContent != null &&
-                   _failureContent != null &&
+                   _rewardLabel != null &&
                    _returnButton != null &&
                    _gameManager != null;
         }
@@ -275,23 +226,6 @@ namespace _Project.UI.RunResult.View
                 if (labels[index].name == objectName)
                 {
                     return labels[index];
-                }
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// 按名称查找结算面板内的对象。
-        /// </summary>
-        private GameObject FindObject(string objectName)
-        {
-            Transform[] transforms = GetComponentsInChildren<Transform>(true);
-            for (int index = 0; index < transforms.Length; index++)
-            {
-                if (transforms[index].name == objectName)
-                {
-                    return transforms[index].gameObject;
                 }
             }
 

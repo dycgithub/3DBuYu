@@ -6,31 +6,60 @@ namespace CombatSystem
     /// <summary>合并道具投射物机制，并按装备顺序选择专属外观和命中音效。</summary>
     internal static class ProjectileProfileComposer
     {
-        /// <summary>组合装备配置、命中效果、专属外观和命中音效。</summary>
+        /// <summary>组合装备机制，并按装备顺序覆盖弹体外观与命中音效。</summary>
         /// <param name="profiles">装备提供的投射物配置。</param>
+        /// <param name="visualDefinitions">按装备顺序排列的直接视觉或配置内视觉。</param>
         /// <param name="selectedProfile">被选作基础数值和轨迹来源的配置。</param>
-        /// <returns>装备配置的独立合并副本；没有有效配置时返回 null。</returns>
+        /// <returns>装备机制或独立视觉的运行时合并副本；两者都不存在时返回 null。</returns>
         internal static ProjectileProfileSO CreateCombinedProfile(
             IReadOnlyList<ProjectileProfileSO> profiles,
+            IReadOnlyList<ProjectileVisualDefinitionSO> visualDefinitions,
             out ProjectileProfileSO selectedProfile)
         {
             selectedProfile = SelectTrajectoryProfile(profiles);
-            if (selectedProfile == null)
+            ProjectileVisualDefinitionSO selectedVisual = SelectVisualDefinition(visualDefinitions);
+            if (selectedProfile == null && selectedVisual == null)
             {
                 return null;
             }
 
             ProjectileProfileSO combined = ProjectileProfileSO.CreateRuntimeProfile(
                 "CombinedTransmitterProjectileProfile");
-            CopyProfileValues(selectedProfile, combined);
-            combined.TrajectoryDefinition = selectedProfile.TrajectoryDefinition;
-            combined.VisualDefinition = SelectVisualDefinition(profiles);
-            combined.ImpactSound = SelectImpactSound(profiles, selectedProfile.ImpactSound);
+            if (selectedProfile != null)
+            {
+                CopyProfileValues(selectedProfile, combined);
+                combined.TrajectoryDefinition = selectedProfile.TrajectoryDefinition;
+            }
+
+            combined.VisualDefinition = selectedVisual;
+            combined.ImpactSound = SelectImpactSound(profiles, selectedProfile?.ImpactSound);
             MergeProfileMechanics(profiles, combined);
             combined.OnHitEffectDefinitions = MergeEffects(profiles, ProfileEffectKind.OnHit);
             combined.OnExpiredEffectDefinitions = MergeEffects(profiles, ProfileEffectKind.OnExpired);
             combined.BeforeHitEffectDefinitions = MergeEffects(profiles, ProfileEffectKind.BeforeHit);
             return combined;
+        }
+
+        /// <summary>以发射器配置补齐仅含道具外观的运行时合并配置。</summary>
+        /// <param name="inputProfile">发射器原始配置。</param>
+        /// <param name="combinedProfile">需要补齐机制并保留道具视觉的合并配置。</param>
+        internal static void ApplyInputProfileAsBase(
+            ProjectileProfileSO inputProfile,
+            ProjectileProfileSO combinedProfile)
+        {
+            if (inputProfile == null || combinedProfile == null)
+            {
+                return;
+            }
+
+            ProjectileVisualDefinitionSO selectedVisual = combinedProfile.VisualDefinition;
+            CopyProfileValues(inputProfile, combinedProfile);
+            combinedProfile.TrajectoryDefinition = inputProfile.TrajectoryDefinition;
+            combinedProfile.VisualDefinition = selectedVisual;
+            combinedProfile.ImpactSound = inputProfile.ImpactSound;
+            combinedProfile.OnHitEffectDefinitions = inputProfile.OnHitEffectDefinitions;
+            combinedProfile.OnExpiredEffectDefinitions = inputProfile.OnExpiredEffectDefinitions;
+            combinedProfile.BeforeHitEffectDefinitions = inputProfile.BeforeHitEffectDefinitions;
         }
 
         /// <summary>选择装备顺序中最后一个非空命中音效，无装备音效时保留基础配置值。</summary>
@@ -59,21 +88,21 @@ namespace CombatSystem
             return selectedSound;
         }
 
-        /// <summary>按装备顺序选择最近一个带专属外观的弹体视觉。</summary>
-        /// <param name="profiles">按成功放置顺序排列的道具投射物配置。</param>
+        /// <summary>按装备顺序选择最近一个声明覆盖发射器外观的视觉。</summary>
+        /// <param name="visualDefinitions">按成功放置顺序排列的弹体视觉。</param>
         /// <returns>最近的专属外观；不存在时返回空值。</returns>
         private static ProjectileVisualDefinitionSO SelectVisualDefinition(
-            IReadOnlyList<ProjectileProfileSO> profiles)
+            IReadOnlyList<ProjectileVisualDefinitionSO> visualDefinitions)
         {
             ProjectileVisualDefinitionSO selectedVisual = null;
-            if (profiles == null)
+            if (visualDefinitions == null)
             {
                 return null;
             }
 
-            for (int index = 0; index < profiles.Count; index++)
+            for (int index = 0; index < visualDefinitions.Count; index++)
             {
-                ProjectileVisualDefinitionSO visual = profiles[index]?.VisualDefinition;
+                ProjectileVisualDefinitionSO visual = visualDefinitions[index];
                 if (visual != null && visual.OverridesEmitterVisual)
                 {
                     selectedVisual = visual;

@@ -10,8 +10,14 @@ namespace CombatSystem
         /// <summary>当前全局发射器射速倍率。</summary>
         float AttackSpeedMultiplier { get; }
 
+        /// <summary>当前全局发射器攻击伤害倍率。</summary>
+        float AttackDamageMultiplier { get; }
+
         /// <summary>设置一个持续到状态清除的全局射速倍率。</summary>
         void SetAttackSpeedMultiplier(float multiplier, int sourceInstanceId, float durationSeconds);
+
+        /// <summary>设置一个限时全局发射器攻击伤害倍率。</summary>
+        void SetAttackDamageMultiplier(float multiplier, int sourceInstanceId, float durationSeconds);
 
         /// <summary>保存一个限时发射器集火目标。</summary>
         void SetFocusedTarget(IDamageable target, float durationSeconds, int sourceInstanceId);

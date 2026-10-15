@@ -9,7 +9,7 @@ using VContainer;
 namespace EnemySystem.Components
 {
     /// <summary>
-    /// 敌人与玩家发生 Trigger 接触时造成能量伤害，并通知可选的接触死亡行为。
+    /// 敌人与玩家发生 Trigger 接触时造成能量伤害、请求玩家魔方转动，并通知接触死亡行为。
     /// <para>冷却状态随启用、禁用和对象池生命周期清理。</para>
     /// </summary>
     [ExecuteAlways]
@@ -110,7 +110,7 @@ namespace EnemySystem.Components
                 {
                     if (_damageProcessor != null)
                     {
-                        _damageProcessor.TryApplyDamage(
+                        if (_damageProcessor.TryApplyDamage(
                             _playerTarget,
                             new DamageRequest
                             {
@@ -120,12 +120,18 @@ namespace EnemySystem.Components
                                 HitPosition = other.ClosestPoint(transform.position),
                                 HitNormal = Vector3.up
                             },
-                            out _);
+                            out DamageResult result) && result.AppliedDamage > 0f)
+                        {
+                            TwistPlayerPuzzle(other);
+                        }
                     }
                 }
                 else
                 {
-                    _energyService.Drain(damage, EnergySpendKind.EnemyContact);
+                    if (_energyService.Drain(damage, EnergySpendKind.EnemyContact) > 0f)
+                    {
+                        TwistPlayerPuzzle(other);
+                    }
                 }
             }
 
@@ -149,6 +155,15 @@ namespace EnemySystem.Components
             return rigidbody != null
                 ? rigidbody.GetInstanceID()
                 : collider.transform.root.gameObject.GetInstanceID();
+        }
+
+        /// <summary>Finds the player's existing child puzzle and requests one random turn.</summary>
+        /// <param name="collider">Player collider from the successful contact.</param>
+        private static void TwistPlayerPuzzle(Collider collider)
+        {
+            Play.DiamondTwistController puzzle =
+                collider.transform.root.GetComponentInChildren<Play.DiamondTwistController>(true);
+            puzzle?.RandomTurn();
         }
 
         /// <summary>清除当前敌人所有玩家接触的冷却时间。</summary>

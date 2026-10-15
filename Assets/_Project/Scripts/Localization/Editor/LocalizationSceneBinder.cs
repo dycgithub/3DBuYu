@@ -27,9 +27,7 @@ namespace _Project.Localization.Editor
     {
         private static readonly HashSet<string> DynamicResultNames = new()
         {
-            "EyebrowLabel", "TitleLabel", "SubtitleLabel", "DifficultyLabel", "ElapsedTimeLabel",
-            "KillCountLabel", "BestStreakLabel", "SessionPointsLabel", "SettlementMultiplierLabel",
-            "SettlementFormulaLabel", "FailureRewardLabel"
+            "TitleLabel", "DifficultyLabel", "ElapsedTimeLabel", "KillCountLabel", "RewardLabel"
         };
 
         /// <summary>绑定正式游戏资源；已打开场景使用内存中的编辑结果并保存，不关闭原场景。</summary>

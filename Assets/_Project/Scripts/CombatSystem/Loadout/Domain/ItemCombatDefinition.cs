@@ -3,7 +3,7 @@ using UnityEngine;
 namespace CombatSystem
 {
     /// <summary>
-    /// 物品在战斗系统中的静态配置，定义作用范围、技能授予和发射器修正。
+    /// 物品在战斗系统中的静态配置，定义作用范围、技能授予、发射器修正与专属弹体外观。
     /// </summary>
     [CreateAssetMenu(menuName = "Combat/Item Combat Definition")]
     public sealed class ItemCombatDefinitionSO : ScriptableObject
@@ -11,6 +11,7 @@ namespace CombatSystem
         [SerializeField] private CombatScope combatScope = CombatScope.CentralAndTransmitter;
         [Min(0f)] [SerializeField] private float transmitterAdditiveDamageBonus;
         [SerializeField] private ProjectileProfileSO transmitterProjectileProfile;
+        [SerializeField] private ProjectileVisualDefinitionSO transmitterProjectileVisualDefinition;
         [SerializeField] private SkillGrant centralSkillGrant;
         [SerializeField] private TransmitterAttackModifierDefinitionSO[] transmitterAttackModifierDefinitions;
         [Min(0f)] [SerializeField] private float transmitterEnergyCostMultiplier = 1f;
@@ -21,6 +22,9 @@ namespace CombatSystem
         public CombatScope CombatScope => combatScope;
         public float TransmitterAdditiveDamageBonus => transmitterAdditiveDamageBonus;
         public ProjectileProfileSO TransmitterProjectileProfile => transmitterProjectileProfile;
+        /// <summary>发射器道具提供的独立弹体视觉；不包含投射物机制。</summary>
+        public ProjectileVisualDefinitionSO TransmitterProjectileVisualDefinition
+            => transmitterProjectileVisualDefinition;
         public SkillGrant CentralSkillGrant => centralSkillGrant;
         public TransmitterAttackModifierDefinitionSO[] TransmitterAttackModifierDefinitions
             => transmitterAttackModifierDefinitions;

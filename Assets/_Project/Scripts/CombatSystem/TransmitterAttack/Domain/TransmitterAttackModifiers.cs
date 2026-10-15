@@ -2,8 +2,18 @@ using UnityEngine;
 
 namespace CombatSystem
 {
+    /// <summary>指定合并配置缺少道具机制时使用的基础投射物配置来源。</summary>
+    public enum ProjectileProfileBaseSource
+    {
+        /// <summary>数值和轨迹来自装备组合中的投射物配置。</summary>
+        LoadoutProfiles,
+
+        /// <summary>仅视觉配置来自装备，攻击机制沿用发射器输入。</summary>
+        EmitterInput
+    }
+
     /// <summary>
-    /// 汇总一个发射器端口装备产生的攻击修正值。
+    /// 汇总发射器端口装备产生的攻击修正值与投射物配置来源。
     /// </summary>
     public struct TransmitterAttackModifiers
     {
@@ -43,6 +53,9 @@ namespace CombatSystem
         /// <summary>覆盖发射器默认投射物配置；为空时沿用发射器配置。</summary>
         public ProjectileProfileSO ProjectileProfileOverride;
 
+        /// <summary>标记仅视觉合并配置应继承发射器输入的攻击机制。</summary>
+        public ProjectileProfileBaseSource ProfileBaseSource;
+
         /// <summary>获取不改变输入攻击的默认修正值。</summary>
         public static TransmitterAttackModifiers Default => new()
         {
@@ -51,7 +64,8 @@ namespace CombatSystem
             RangeMultiplier = 1f,
             AttackSpeedMultiplier = 1f,
             CollisionRadiusMultiplier = 1f,
-            CriticalDamageMultiplier = 1f
+            CriticalDamageMultiplier = 1f,
+            ProfileBaseSource = ProjectileProfileBaseSource.LoadoutProfiles
         };
 
         /// <summary>将所有修正值限制到攻击构建器可处理的有效范围。</summary>

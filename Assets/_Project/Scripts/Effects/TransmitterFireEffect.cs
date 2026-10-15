@@ -1,12 +1,14 @@
 using System;
 using CombatSystem;
+using Play;
 using Services;
+using UnityEngine;
 using VContainer.Unity;
 
 namespace EffectSystem
 {
     /// <summary>
-    /// 监听发射器攻击成功事件，并播放端口配置的开火特效。
+    /// 监听发射器攻击成功事件，驱动对应端口后坐并播放开火特效。
     /// </summary>
     public sealed class TransmitterFireEffect : IStartable, IDisposable
     {
@@ -40,6 +42,15 @@ namespace EffectSystem
         /// <param name="input">成功提交的攻击输入。</param>
         private void HandleAttackSucceeded(TransmitterAttackInput input)
         {
+            if (input.OriginTransform != null)
+            {
+                TransmitterRecoil recoil = input.OriginTransform.GetComponentInChildren<TransmitterRecoil>();
+                if (recoil != null)
+                {
+                    recoil.Kick(input.LaunchDirection);
+                }
+            }
+
             if (input.FireEffectId != EffectId.None)
             {
                 _effectService.Play(

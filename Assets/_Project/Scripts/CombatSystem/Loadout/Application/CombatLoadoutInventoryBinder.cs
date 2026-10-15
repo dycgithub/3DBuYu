@@ -18,6 +18,7 @@ namespace CombatSystem
         private readonly GameManager _gameManager;
         private readonly ITransmitterGlobalEffectResetService _globalEffectReset;
         private readonly ICentralSkillEffectResetService _centralEffectReset;
+        private bool _isConsumingSkillItem;
 
         /// <summary>
         /// 创建库存与战斗装备之间的绑定服务。
@@ -71,7 +72,7 @@ namespace CombatSystem
         }
 
         /// <summary>
-        /// 尝试从所属库存网格移除一个物品实例。
+        /// 尝试从所属库存网格移除技能来源物品，并保留本次施放已提交的限时效果。
         /// </summary>
         /// <param name="itemInstanceId">要移除的物品实例标识。</param>
         /// <returns>实际从网格移除物品时返回 <c>true</c>。</returns>
@@ -81,7 +82,17 @@ namespace CombatSystem
             {
                 return false;
             }
-            return grid.RemoveItem(item);
+
+            bool wasConsumingSkillItem = _isConsumingSkillItem;
+            _isConsumingSkillItem = true;
+            try
+            {
+                return grid.RemoveItem(item);
+            }
+            finally
+            {
+                _isConsumingSkillItem = wasConsumingSkillItem;
+            }
         }
 
         /// <summary>
@@ -159,8 +170,13 @@ namespace CombatSystem
 
             if (grid.GridType == GridType.CentralBackpack)
             {
-                _globalEffectReset?.ClearAll();
-                _centralEffectReset?.ClearPermanentEffects();
+                if (!_isConsumingSkillItem)
+                {
+                    _globalEffectReset?.ClearAll();
+                    _centralEffectReset?.ClearPermanentEffects();
+                }
+                // 技能动作先于来源消费执行；消费不等于手动卸载，限时效果应继续生效。
+
                 _centralSkillLoadout.ReplaceItems(grid.Items);
                 return;
             }

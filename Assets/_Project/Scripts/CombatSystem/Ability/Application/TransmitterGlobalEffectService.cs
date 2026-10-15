@@ -5,7 +5,7 @@ namespace CombatSystem
 {
     /// <summary>
     /// 保存中央主动技能提交的发射器全局效果，供发射器攻击系统读取。
-    /// 不修改发射器配置或攻击构建规则；效果持续到来源或装备状态被清除。
+    /// 每种效果按各自时限失效，也可由来源移除或装备状态清理提前重置。
     /// </summary>
     public sealed class TransmitterGlobalEffectService :
         ITransmitterGlobalEffectService,
@@ -14,6 +14,9 @@ namespace CombatSystem
         /// <summary>当前全局发射器射速倍率。</summary>
         private float _attackSpeedMultiplier = 1f;
         private float _attackSpeedExpiresAt = float.PositiveInfinity;
+        private float _attackDamageMultiplier = 1f;
+        private float _attackDamageExpiresAt = float.PositiveInfinity;
+        private int _attackDamageSourceInstanceId;
 
         /// <summary>未过期时返回当前全局射速倍率。</summary>
         public float AttackSpeedMultiplier
@@ -26,6 +29,20 @@ namespace CombatSystem
                 }
 
                 return _attackSpeedMultiplier;
+            }
+        }
+
+        /// <summary>未过期时返回当前全局发射器伤害倍率。</summary>
+        public float AttackDamageMultiplier
+        {
+            get
+            {
+                if (Time.time >= _attackDamageExpiresAt)
+                {
+                    ClearAttackDamage();
+                }
+
+                return _attackDamageMultiplier;
             }
         }
 
@@ -44,6 +61,19 @@ namespace CombatSystem
             _attackSpeedMultiplier = Mathf.Max(0f, multiplier);
             SourceInstanceId = sourceInstanceId;
             _attackSpeedExpiresAt = durationSeconds > 0f
+                ? Time.time + durationSeconds
+                : float.PositiveInfinity;
+        }
+
+        /// <summary>保存指定来源的限时发射器伤害倍率。</summary>
+        public void SetAttackDamageMultiplier(
+            float multiplier,
+            int sourceInstanceId,
+            float durationSeconds)
+        {
+            _attackDamageMultiplier = Mathf.Max(0f, multiplier);
+            _attackDamageSourceInstanceId = sourceInstanceId;
+            _attackDamageExpiresAt = durationSeconds > 0f
                 ? Time.time + durationSeconds
                 : float.PositiveInfinity;
         }
@@ -74,7 +104,9 @@ namespace CombatSystem
         /// <summary>只清除仍由指定来源持有的效果。</summary>
         public void ClearSource(int sourceInstanceId)
         {
-            if (SourceInstanceId != sourceInstanceId && _focusSourceInstanceId != sourceInstanceId)
+            if (SourceInstanceId != sourceInstanceId &&
+                _attackDamageSourceInstanceId != sourceInstanceId &&
+                _focusSourceInstanceId != sourceInstanceId)
             {
                 return;
             }
@@ -82,6 +114,11 @@ namespace CombatSystem
             if (SourceInstanceId == sourceInstanceId)
             {
                 ClearAttackSpeed();
+            }
+
+            if (_attackDamageSourceInstanceId == sourceInstanceId)
+            {
+                ClearAttackDamage();
             }
 
             if (_focusSourceInstanceId == sourceInstanceId)
@@ -94,6 +131,7 @@ namespace CombatSystem
         public void ClearAll()
         {
             ClearAttackSpeed();
+            ClearAttackDamage();
             ClearFocusedTarget();
         }
 
@@ -103,6 +141,14 @@ namespace CombatSystem
             _attackSpeedMultiplier = 1f;
             _attackSpeedExpiresAt = float.PositiveInfinity;
             SourceInstanceId = 0;
+        }
+
+        /// <summary>清除当前发射器伤害倍率并恢复默认状态。</summary>
+        private void ClearAttackDamage()
+        {
+            _attackDamageMultiplier = 1f;
+            _attackDamageExpiresAt = float.PositiveInfinity;
+            _attackDamageSourceInstanceId = 0;
         }
 
         /// <summary>清除到期、死亡或来源已移除的集火目标。</summary>

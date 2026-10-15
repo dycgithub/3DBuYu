@@ -117,6 +117,8 @@ namespace Play
             InstantiateModel(FirePoint);
         }
 
+        /// <summary>创建端口视觉模型并确保其具有独立后坐反馈。</summary>
+        /// <param name="parent">承载模型的端口 FirePoint。</param>
         private void InstantiateModel(Transform parent)
         {
             GameObject prefab = IsLocked && So.lockedModelPrefab != null
@@ -134,6 +136,11 @@ namespace Play
 
             _modelInstance.transform.localPosition = Vector3.zero;
             _modelInstance.transform.localRotation = Quaternion.identity;
+            if (_modelInstance.GetComponent<TransmitterRecoil>() == null)
+            {
+                _modelInstance.AddComponent<TransmitterRecoil>();
+            }
+
             _modelInstance.SetActive(!IsLocked || So.lockedModelPrefab != null);
         }
 

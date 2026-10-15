@@ -1,17 +1,16 @@
-using System.Collections.Generic;
-using UnityEngine;
-using Services;
-using VContainer;
 using EffectSystem;
+using System.Collections.Generic;
+using Services;
+using UnityEngine;
+using VContainer;
 
 namespace Play
 {
     /// <summary>
     /// 玩家碰撞反馈组件。
-    /// 挂在球壁或炮台上，当敌人接触时播放一次受击效果。
-    /// 有短暂冷却防止同一敌人连续触发。
+    /// 挂在玩家 Rigidbody 上，根据敌人根标签和接触坐标播放受击效果。
     /// </summary>
-    [RequireComponent(typeof(Collider))]
+    [RequireComponent(typeof(Rigidbody))]
     public class PlayerCollisionFeedback : MonoBehaviour
     {
         [Tooltip("碰撞冷却时间（秒），防止同一敌人连续触发。")]
@@ -21,59 +20,61 @@ namespace Play
         [Tooltip("碰撞特效键（通过 EffectManager 播放）。")]
         public EffectId hitEffect = EffectId.PlayerDamage;
 
-        // ── 内部 ──────────────────────────────────────────
-
-        private readonly Dictionary<int, float> _enemyCooldowns = new Dictionary<int, float>();
+        private readonly Dictionary<int, float> _enemyCooldowns = new();
 
         [Inject] private ICombatPhaseService _combatPhase;
         [Inject] private IEffectService _effectService;
 
-        #region Unity 生命周期
-
         private void OnTriggerEnter(Collider other)
         {
-            TryPlayHitEffect(other);
+            TryPlayHitEffect(other, other.ClosestPoint(transform.position));
         }
 
         private void OnCollisionEnter(Collision collision)
         {
-            TryPlayHitEffect(collision.collider);
+            Collider other = collision.collider;
+            Vector3 hitPosition = collision.contactCount > 0
+                ? collision.GetContact(0).point
+                : other.ClosestPoint(transform.position);
+            TryPlayHitEffect(other, hitPosition);
         }
 
-        #endregion
-
-        #region 内部
-
-        private void TryPlayHitEffect(Collider other)
+        private void OnDisable()
         {
-            if (!other.CompareTag("Enemy"))
+            _enemyCooldowns.Clear();
+        }
+
+        private void TryPlayHitEffect(Collider other, Vector3 hitPosition)
+        {
+            if (other == null || !IsEnemyCollider(other))
             {
                 return;
             }
 
-            int enemyId = other.GetInstanceID();
-            if (_enemyCooldowns.TryGetValue(enemyId, out float lastHitTime))
+            int enemyId = other.transform.root.gameObject.GetInstanceID();
+            if (_enemyCooldowns.TryGetValue(enemyId, out float lastHitTime) &&
+                Time.time - lastHitTime < Mathf.Max(0f, hitCooldown))
             {
-                if (Time.time - lastHitTime < hitCooldown)
-                {
-                    return;
-                }
+                return;
             }
-            _enemyCooldowns[enemyId] = Time.time;
 
-            PlayHitEffect();
+            _enemyCooldowns[enemyId] = Time.time;
+            PlayHitEffect(hitPosition);
         }
 
-        private void PlayHitEffect()
+        private static bool IsEnemyCollider(Collider collider)
+        {
+            return collider.CompareTag("Enemy") || collider.transform.root.CompareTag("Enemy");
+        }
+
+        private void PlayHitEffect(Vector3 hitPosition)
         {
             if (_combatPhase == null || !_combatPhase.CanPerformCombatActions)
             {
                 return;
             }
 
-            _effectService?.Play(hitEffect, transform.position);
+            _effectService?.Play(hitEffect, hitPosition);
         }
-
-        #endregion
     }
 }

@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace CombatSystem
 {
-    /// <summary>按 PortId 缓存发射器背包内容，并按物品实例强度计算攻击修正。</summary>
+    /// <summary>按 PortId 缓存发射器装备，汇总攻击修正与按顺序覆盖的弹体视觉。</summary>
     public sealed class TransmitterAttackLoadout : ITransmitterAttackModifierSource
     {
         private readonly ItemCombatDefinitionResolver _definitionResolver;
@@ -107,33 +107,53 @@ namespace CombatSystem
             return scope == CombatScope.Transmitter || scope == CombatScope.CentralAndTransmitter;
         }
 
+        /// <summary>合并装备机制与独立视觉，并保存需要释放的运行时配置。</summary>
+        /// <param name="items">按装备顺序排列的发射器物品。</param>
+        /// <param name="ownedProjectileProfile">由本端口持有的合并配置。</param>
+        /// <returns>端口的攻击修正及可选的投射物配置覆盖。</returns>
         private TransmitterAttackModifiers BuildModifiers(
             IReadOnlyList<ItemVM> items,
             out ProjectileProfileSO ownedProjectileProfile)
         {
             TransmitterAttackModifiers modifiers = TransmitterAttackModifiers.Default;
             var projectileProfiles = new List<ProjectileProfileSO>();
+            var visualDefinitions = new List<ProjectileVisualDefinitionSO>();
             for (int index = 0; index < items.Count; index++)
             {
                 TransmitterAttackModifiers itemModifiers = TransmitterAttackModifiers.Default;
-                ApplyItemModifiers(items[index], ref itemModifiers, projectileProfiles);
+                ApplyItemModifiers(
+                    items[index],
+                    ref itemModifiers,
+                    projectileProfiles,
+                    visualDefinitions);
                 ScaleItemModifiers(ref itemModifiers, Supply.ItemPowerTable.GetScale(items[index].PowerLevel));
                 MergeModifiers(ref modifiers, in itemModifiers);
             }
 
             ownedProjectileProfile = ProjectileProfileComposer.CreateCombinedProfile(
                 projectileProfiles,
+                visualDefinitions,
                 out ProjectileProfileSO selectedProfile);
             modifiers.ProjectileProfileOverride = ownedProjectileProfile ?? selectedProfile;
+            if (ownedProjectileProfile != null && selectedProfile == null)
+            {
+                modifiers.ProfileBaseSource = ProjectileProfileBaseSource.EmitterInput;
+            }
 
             modifiers.ClampToValidRanges();
             return modifiers;
         }
 
+        /// <summary>收集单件物品的攻击修正、投射物机制与视觉候选。</summary>
+        /// <param name="item">当前发射器物品。</param>
+        /// <param name="modifiers">要累加的数值与配置来源。</param>
+        /// <param name="projectileProfiles">去重后的投射物机制配置。</param>
+        /// <param name="visualDefinitions">保持装备顺序的视觉候选。</param>
         private void ApplyItemModifiers(
             ItemVM item,
             ref TransmitterAttackModifiers modifiers,
-            List<ProjectileProfileSO> projectileProfiles)
+            List<ProjectileProfileSO> projectileProfiles,
+            List<ProjectileVisualDefinitionSO> visualDefinitions)
         {
             if (!_definitionResolver.TryResolveCombatScope(item.Definition, out CombatScope scope)
                 || (scope != CombatScope.Transmitter && scope != CombatScope.CentralAndTransmitter))
@@ -150,10 +170,12 @@ namespace CombatSystem
 
             modifiers.AdditiveDamageBonus += combat.TransmitterAdditiveDamageBonus;
             modifiers.EnergyCostMultiplier *= combat.TransmitterEnergyCostMultiplier;
-            if (combat.TransmitterProjectileProfile != null
-                && !projectileProfiles.Contains(combat.TransmitterProjectileProfile))
+            ProjectileProfileSO itemProfile = combat.TransmitterProjectileProfile;
+            visualDefinitions.Add(
+                combat.TransmitterProjectileVisualDefinition ?? itemProfile?.VisualDefinition);
+            if (itemProfile != null && !projectileProfiles.Contains(itemProfile))
             {
-                projectileProfiles.Add(combat.TransmitterProjectileProfile);
+                projectileProfiles.Add(itemProfile);
             }
 
             TransmitterAttackModifierDefinitionSO[] definitions = combat.TransmitterAttackModifierDefinitions;
@@ -233,6 +255,7 @@ namespace CombatSystem
             if (modifiers.ProjectileProfileOverride == null)
             {
                 modifiers.ProjectileProfileOverride = contribution.ProjectileProfileOverride;
+                modifiers.ProfileBaseSource = contribution.ProfileBaseSource;
             }
         }
 

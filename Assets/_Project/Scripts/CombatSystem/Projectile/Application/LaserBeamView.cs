@@ -9,8 +9,23 @@ namespace CombatSystem
         private const float DefaultBeamWidth = 0.1f;
         private const float CoreWidthRatio = 0.35f;
         private const float CoreTintBlend = 0.8f;
+        private const float OuterBeamAlpha = 0.28f;
+        private const float OuterEdgeSoftness = 0.42f;
+        private const float OuterCoreWidth = 0.2f;
+        private const float CoreEdgeSoftness = 0.06f;
+        private const float ContinuousSegmentCount = 1f;
+        private const float ContinuousSegmentLength = 1f;
+        private const float StaticScrollSpeed = 0f;
         private static readonly int BaseColorPropertyId = Shader.PropertyToID("_BaseColor");
         private static readonly int ColorPropertyId = Shader.PropertyToID("_Color");
+        private static readonly int CoreColorPropertyId = Shader.PropertyToID("_CoreColor");
+        private static readonly int SegmentCountPropertyId = Shader.PropertyToID("_SegmentCount");
+        private static readonly int SegmentLengthPropertyId = Shader.PropertyToID("_SegmentLength");
+        private static readonly int ScrollSpeedPropertyId = Shader.PropertyToID("_ScrollSpeed");
+        private static readonly int EdgeSoftnessPropertyId = Shader.PropertyToID("_EdgeSoftness");
+        private static readonly int CoreWidthPropertyId = Shader.PropertyToID("_CoreWidth");
+        private static readonly int StartFadePropertyId = Shader.PropertyToID("_StartFade");
+        private static readonly int EndFadePropertyId = Shader.PropertyToID("_EndFade");
 
         private readonly List<LineRenderer> _lineRenderers = new();
         private readonly Vector3[] _beamPoints = new Vector3[2];
@@ -18,7 +33,7 @@ namespace CombatSystem
         private LineRenderer _mainBeam;
         private LineRenderer _brightCore;
 
-        /// <summary>读取 Beam 预制体中的线段，缺少亮芯时补充一条窄线。</summary>
+        /// <summary>读取 Beam 预制体中的外束与亮芯，缺失亮芯时补充第二条线。</summary>
         private void Awake()
         {
             _neutralMaterialProperties = new MaterialPropertyBlock();
@@ -26,7 +41,7 @@ namespace CombatSystem
             ResetForPool();
         }
 
-        /// <summary>应用配置颜色并准备租出的光束。</summary>
+        /// <summary>准备连续亮芯与柔和外束，不叠加额外渲染层。</summary>
         /// <param name="tint">激光视觉定义提供的颜色。</param>
         internal void Prepare(Color tint)
         {
@@ -35,8 +50,10 @@ namespace CombatSystem
             _brightCore.enabled = true;
             _mainBeam.positionCount = 0;
             _brightCore.positionCount = 0;
-            _mainBeam.startColor = tint;
-            _mainBeam.endColor = tint;
+            Color outerTint = tint;
+            outerTint.a *= OuterBeamAlpha;
+            _mainBeam.startColor = outerTint;
+            _mainBeam.endColor = outerTint;
 
             Color coreTint = Color.Lerp(tint, Color.white, CoreTintBlend);
             coreTint.a = tint.a;
@@ -45,8 +62,8 @@ namespace CombatSystem
             _brightCore.startWidth = _mainBeam.startWidth * CoreWidthRatio;
             _brightCore.endWidth = _mainBeam.endWidth * CoreWidthRatio;
             _brightCore.widthMultiplier = _mainBeam.widthMultiplier;
-            SetNeutralMaterialColor(_mainBeam);
-            SetNeutralMaterialColor(_brightCore);
+            SetBeamMaterial(_mainBeam, OuterEdgeSoftness, OuterCoreWidth);
+            SetBeamMaterial(_brightCore, CoreEdgeSoftness, 1f);
         }
 
         /// <summary>逐步更新连续光束的起点和当前终点。</summary>
@@ -127,13 +144,27 @@ namespace CombatSystem
             _brightCore.loop = false;
         }
 
-        /// <summary>让线段颜色仅由光束渐变控制，避免材质属性再次乘色。</summary>
-        private void SetNeutralMaterialColor(LineRenderer lineRenderer)
+        /// <summary>让光束渐变控制颜色，并覆盖共享材质的分段脉冲参数。</summary>
+        /// <param name="lineRenderer">需要显示为连续光束的线段。</param>
+        /// <param name="edgeSoftness">横截面边缘的柔化比例。</param>
+        /// <param name="coreWidth">线段内部亮芯的宽度比例。</param>
+        private void SetBeamMaterial(
+            LineRenderer lineRenderer,
+            float edgeSoftness,
+            float coreWidth)
         {
             _neutralMaterialProperties ??= new MaterialPropertyBlock();
             lineRenderer.GetPropertyBlock(_neutralMaterialProperties);
             _neutralMaterialProperties.SetColor(BaseColorPropertyId, Color.white);
             _neutralMaterialProperties.SetColor(ColorPropertyId, Color.white);
+            _neutralMaterialProperties.SetColor(CoreColorPropertyId, Color.white);
+            _neutralMaterialProperties.SetFloat(SegmentCountPropertyId, ContinuousSegmentCount);
+            _neutralMaterialProperties.SetFloat(SegmentLengthPropertyId, ContinuousSegmentLength);
+            _neutralMaterialProperties.SetFloat(ScrollSpeedPropertyId, StaticScrollSpeed);
+            _neutralMaterialProperties.SetFloat(EdgeSoftnessPropertyId, edgeSoftness);
+            _neutralMaterialProperties.SetFloat(CoreWidthPropertyId, coreWidth);
+            _neutralMaterialProperties.SetFloat(StartFadePropertyId, 0.02f);
+            _neutralMaterialProperties.SetFloat(EndFadePropertyId, 0.08f);
             lineRenderer.SetPropertyBlock(_neutralMaterialProperties);
         }
     }

@@ -267,24 +267,19 @@ namespace EnemySystem.Visual
             }
         }
 
-        /// <summary>第一次绑定 ECS 实体时写入配置颜色；生命状态由 R3 订阅提供。</summary>
+        /// <summary>首次绑定保留类型材质基础色，并从共享配置读取裂纹与发光颜色。</summary>
         private static void InitializeBoundState(Entry entry)
         {
             EnemyVisualConfigSO config = entry.Enemy.Attributes != null
                 ? entry.Enemy.Attributes.visualConfig
                 : null;
-            if (config != null)
-            {
-                entry.State.BaseColor = ToLinear(config.baseColor);
-                entry.State.CrackColor = ToLinear(config.crackColor);
-                entry.State.EmissionColor = ToLinear(config.emissionColor);
-            }
-            else
-            {
-                entry.State.BaseColor = entry.Bridge.CachedBaseColor;
-                entry.State.CrackColor = entry.Bridge.CachedCrackColor;
-                entry.State.EmissionColor = entry.Bridge.CachedEmissionColor;
-            }
+            entry.State.BaseColor = entry.Bridge.CachedBaseColor;
+            entry.State.CrackColor = config != null
+                ? ToLinear(config.crackColor)
+                : entry.Bridge.CachedCrackColor;
+            entry.State.EmissionColor = config != null
+                ? ToLinear(config.emissionColor)
+                : entry.Bridge.CachedEmissionColor;
 
             entry.IsInitialized = true;
             entry.IsDirty = true;

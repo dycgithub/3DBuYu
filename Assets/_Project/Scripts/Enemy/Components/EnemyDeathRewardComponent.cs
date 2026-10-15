@@ -7,7 +7,7 @@ namespace EnemySystem.Components
 {
     /// <summary>
     /// 敌人死亡奖励组件。
-    /// <para>奖励数值由所属 <see cref="EnemyAttributesSO"/> 提供；本组件只负责一次性提交能量和积分。</para>
+    /// <para>奖励数值由所属 <see cref="EnemyAttributesSO"/> 提供；记录实际到账结果供死亡表现使用。</para>
     /// </summary>
     [DisallowMultipleComponent]
     [RequireComponent(typeof(Enemy))]
@@ -20,7 +20,10 @@ namespace EnemySystem.Components
         private Enemy _enemy;
         private bool _subscribed;
         private bool _rewarded;
+        private bool _positiveRewardGranted;
         private bool _dependencyErrorReported;
+
+        internal bool HasPositiveReward => _positiveRewardGranted;
 
         /// <summary>获取当前敌人配置中的能量奖励。</summary>
         public float EnergyReward
@@ -54,6 +57,7 @@ namespace EnemySystem.Components
         private void OnEnable()
         {
             _rewarded = false;
+            _positiveRewardGranted = false;
             _dependencyErrorReported = false;
             _enemy ??= GetComponent<Enemy>();
 
@@ -113,14 +117,16 @@ namespace EnemySystem.Components
                 return;
             }
 
-            _energy.AddEnergy(EnergyReward);
-            _gameEventService.NotifyEnemyKilled(PointsReward);
+            float gainedEnergy = _energy.AddEnergy(EnergyReward);
+            int gainedPoints = _gameEventService.NotifyEnemyKilled(PointsReward);
+            _positiveRewardGranted = gainedEnergy > 0f || gainedPoints > 0;
         }
 
         /// <summary>实体主动重置时允许下一次死亡再次提交奖励。</summary>
         private void HandleReuseRequested()
         {
             _rewarded = false;
+            _positiveRewardGranted = false;
         }
 
         /// <summary>响应宿主广播，补做死亡事件订阅。</summary>
