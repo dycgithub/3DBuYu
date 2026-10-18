@@ -1,7 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
 using DG.Tweening;
+using GameSystem;
 using UnityEngine;
+using VContainer;
 
 namespace Play
 {
@@ -27,7 +29,7 @@ namespace Play
         BPrime
     }
 
-    /// <summary>Rotates one half of the existing Skewb Diamond pieces for each standard face turn.</summary>
+    /// <summary>Rotates one half of the Skewb Diamond and sends each turn sound through shared audio.</summary>
     public sealed class DiamondTwistController : MonoBehaviour
     {
         private const int PieceCount = 14;
@@ -63,6 +65,14 @@ namespace Play
         [InspectorName("FaceCenter_1_1_1")]
         [SerializeField] private Transform FaceCenter_PositiveX_PositiveY_PositiveZ;
 
+        [Header("Turn feedback")]
+        [SerializeField] private AudioClip _turnClip;
+        private AudioManager _audioManager;
+
+        public DiamondNetState NetState { get; } = new();
+        public event System.Action TurnCompleted;
+        private DiamondTwistMove _activeMove;
+
         private readonly Queue<DiamondTwistMove> _queuedTurns = new();
         private Transform[] _pieces;
         private Vector3[] _meshCenters;
@@ -74,6 +84,15 @@ namespace Play
         private float _activeAngle;
         private Tween _turnTween;
         private Coroutine _scramble;
+
+        /// <summary>Receives global audio and resumes moves queued before injection.</summary>
+        /// <param name="audioManager">The project-wide pooled audio manager.</param>
+        [Inject]
+        private void Construct(AudioManager audioManager)
+        {
+            _audioManager = audioManager;
+            StartNextTurn();
+        }
 
         /// <summary>Starts the three-second scramble only when gameplay enables the component.</summary>
         private void OnEnable()
@@ -196,9 +215,14 @@ namespace Play
             return true;
         }
 
-        /// <summary>Starts the next queued move using the pieces currently on that axis's positive side.</summary>
+        /// <summary>Starts a queued move and submits its sound activity to the shared audio service.</summary>
         private void StartNextTurn()
         {
+            if (Application.isPlaying && _turnClip != null && _audioManager == null)
+            {
+                return;
+            }
+
             while (_turnTween == null && _queuedTurns.Count > 0)
             {
                 DiamondTwistMove move = _queuedTurns.Dequeue();
@@ -209,6 +233,12 @@ namespace Play
                 if (!TryPrepareTurn(_axes[axisIndex]))
                 {
                     continue;
+                }
+
+                _activeMove = move;
+                if (Application.isPlaying && _turnClip != null)
+                {
+                    _audioManager.PlayTurnSFX(_turnClip);
                 }
 
                 _turnTween = DOTween.To(() => 0f, ApplyAngle, _activeAngle, TurnDuration)
@@ -275,12 +305,14 @@ namespace Play
             }
         }
 
-        /// <summary>Snaps the completed move to its exact endpoint before starting the next queued move.</summary>
+        /// <summary>Commits pose and discrete colors together before notifying the HUD and starting the next move.</summary>
         private void CompleteTurn()
         {
             ApplyAngle(_activeAngle);
+            NetState.Apply(_activeMove);
             _turnTween = null;
             ClearActiveTurn();
+            TurnCompleted?.Invoke();
             StartNextTurn();
         }
 

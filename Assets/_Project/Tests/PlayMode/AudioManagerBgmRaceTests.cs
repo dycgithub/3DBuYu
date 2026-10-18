@@ -110,7 +110,7 @@ namespace _Project.Tests.PlayMode
             Assert.That(source.volume, Is.EqualTo(1f).Within(PlaybackVolumeTolerance));
         }
 
-        /// <summary>创建配置了菜单与游戏曲目的音频管理器。</summary>
+        /// <summary>创建通过临时目录配置菜单与游戏曲目的音频管理器。</summary>
         /// <param name="menuTrack">菜单曲目。</param>
         /// <param name="gameTrack">游戏曲目。</param>
         /// <returns>已激活的音频管理组件。</returns>
@@ -122,8 +122,11 @@ namespace _Project.Tests.PlayMode
             managerObject.SetActive(false);
 
             Component manager = managerObject.AddComponent(managerType);
-            SetField(manager, "menuBGM", menuTrack);
-            SetField(manager, "gameBGM", gameTrack);
+            UnityEngine.Object catalog = AudioManagerBgmTestCatalog.Create(
+                ("Menu", menuTrack, 1f),
+                ("Game", gameTrack, 1f));
+            _objects.Add(catalog);
+            SetField(manager, "_musicCatalog", catalog);
             SetField(manager, "bgmFadeOutTime", FadeOutDuration);
             SetField(manager, "bgmFadeInTime", FadeInDuration);
             SetField(manager, "sfxPoolSize", 0);
@@ -182,7 +185,7 @@ namespace _Project.Tests.PlayMode
             return manager.GetComponent<AudioSource>();
         }
 
-        /// <summary>设置 AudioManager 上的公开配置字段。</summary>
+        /// <summary>设置音频测试夹具所需的序列化字段。</summary>
         /// <param name="target">配置所属组件。</param>
         /// <param name="fieldName">字段名称。</param>
         /// <param name="value">字段值。</param>
@@ -190,7 +193,7 @@ namespace _Project.Tests.PlayMode
         {
             FieldInfo field = target.GetType().GetField(
                 fieldName,
-                BindingFlags.Instance | BindingFlags.Public);
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             Assert.That(field, Is.Not.Null, $"找不到 AudioManager 字段：{fieldName}");
             field.SetValue(target, value);
         }

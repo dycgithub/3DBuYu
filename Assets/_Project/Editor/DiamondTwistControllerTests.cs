@@ -6,8 +6,8 @@ using Play;
 using UnityEditor;
 using UnityEngine;
 
-/// <summary>验证标准菱形魔方转动行为。</summary>
-public sealed class DiamondTwistControllerTests
+/// <summary>验证标准菱形魔方转动和完成态颜色同步行为。</summary>
+public sealed partial class DiamondTwistControllerTests
 {
     private const string ModelPath = "Assets/_Project/Art/Model/SkewbDiamond.fbx";
     private const float PoseTolerance = 0.1f;

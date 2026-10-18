@@ -88,6 +88,9 @@ public class GameLoopLifetimeScope : LifetimeScope
         builder.RegisterEntryPoint<EnemyThreatMarkerSystem>(Lifetime.Singleton).AsSelf();
         // SupplyScene 覆盖期间 GameScene Canvas 停用，鼠标准星与痕迹同步隐藏。
         builder.RegisterComponentInHierarchy<MousePointerGraphic>().AsSelf();
+        // 固定展开图只读取魔方已完成状态，不跟随相机，也不参与输入射线检测。
+        builder.RegisterComponentInHierarchy<DiamondTwistController>().AsSelf();
+        builder.RegisterComponentInHierarchy<DiamondNetView>().AsSelf();
         // 补给面板在本局场景内直接抽取并交付到普通背包；旧入口服务暂供已有场景逻辑使用。
         builder.Register<SupplyFiveDrawService>(Lifetime.Scoped).AsSelf();
         builder.RegisterComponentInHierarchy<SupplyPanel>().AsSelf();

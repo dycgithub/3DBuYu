@@ -1,37 +1,19 @@
 using System.Collections;
 using System.Collections.Generic;
 using Services;
+using R3;
 using UnityEngine;
 using UnityEngine.Audio;
 
 namespace GameSystem
 {
-    public enum BGMType
-    {
-        None,
-        Menu,
-        Game,
-        Battle,
-        Victory,
-        GameOver
-    }
-
-    public class AudioManager : MonoBehaviour
+    public partial class AudioManager : MonoBehaviour
     {
         [Header("音频混音器")]
         public AudioMixer mainMixer;
         public string masterVolumeParam = "MasterVolume";
         public string bgmVolumeParam = "BGMVolume";
         public string sfxVolumeParam = "SFXVolume";
-
-        [Header("背景音乐")]
-        public AudioClip menuBGM;
-        public AudioClip gameBGM;
-        public AudioClip battleBGM;
-        public AudioClip victoryBGM;
-        public AudioClip gameOverBGM;
-        public float bgmFadeInTime = 2f;
-        public float bgmFadeOutTime = 1f;
 
         [Header("音效")]
         public int sfxPoolSize = 10;
@@ -47,14 +29,16 @@ namespace GameSystem
 
         private IGamePauseService _pauseService;
 
-        private AudioSource bgmSource;
         private readonly List<AudioSource> sfxSources = new();
         private readonly Queue<AudioSource> sfxPool = new();
         private readonly Dictionary<AudioSource, int> sfxLeaseIds = new();
         private readonly Dictionary<AudioSource, float> sfxLocalVolumes = new();
-        private Coroutine bgmTransition;
-        private BGMType currentBGM = BGMType.None;
         private readonly Dictionary<string, AudioClip> sfxDictionary = new();
+        private const double TurnSilenceSeconds = 2d;
+        private readonly Subject<AudioClip> _turnRequests = new();
+        private System.IDisposable _turnSubscription;
+        private double _lastTurnTime = double.NegativeInfinity;
+        private AudioSource _turnSource;
 
         public float MasterVolume { get; private set; }
         public float BGMVolume { get; private set; }
@@ -63,6 +47,7 @@ namespace GameSystem
         private void Awake()
         {
             Initialize();
+            _turnSubscription = _turnRequests.Subscribe(HandleTurnSound);
         }
 
         private void Start()
@@ -74,6 +59,8 @@ namespace GameSystem
 
         private void OnDestroy()
         {
+            _turnSubscription?.Dispose();
+            _turnRequests.Dispose();
             UnbindPauseService();
         }
 
@@ -121,9 +108,7 @@ namespace GameSystem
 
         private void Initialize()
         {
-            bgmSource = gameObject.AddComponent<AudioSource>();
-            bgmSource.loop = true;
-            bgmSource.playOnAwake = false;
+            InitializeBgmSource();
 
             for (int i = 0; i < sfxPoolSize; i++)
             {
@@ -143,125 +128,34 @@ namespace GameSystem
             Debug.Log("音频管理器初始化完成");
         }
 
-        /// <summary>播放指定背景音乐；相同曲目的重复请求不重启播放。</summary>
-        /// <param name="type">背景音乐类型。</param>
-        /// <param name="fade">是否在切换时淡变。</param>
-        public void PlayBGM(BGMType type, bool fade = true)
+        /// <summary>提交实际转动事件；只有首次或超过两秒无转动后才播放声音。</summary>
+        /// <param name="clip">本次转动配置的音频。</param>
+        public void PlayTurnSFX(AudioClip clip)
         {
-            if (currentBGM == type)
+            _turnRequests.OnNext(clip);
+        }
+
+        /// <summary>每次转动刷新活动时间，并通过共享音源池播放不重叠的首声。</summary>
+        /// <param name="clip">本次转动音频；空音频仍记录转动活动。</param>
+        private void HandleTurnSound(AudioClip clip)
+        {
+            double now = Time.realtimeSinceStartupAsDouble;
+            double silence = now - _lastTurnTime;
+            _lastTurnTime = now;
+            if (silence <= TurnSilenceSeconds || clip == null || _turnSource != null)
             {
                 return;
             }
 
-            AudioClip clip = GetBGMClip(type);
-            if (clip == null)
+            AudioSource source = GetSFXSource();
+            if (source == null)
             {
                 return;
             }
 
-            ApplyBgmRequest(type, clip, fade);
-        }
-
-        /// <summary>停止背景音乐，并取消此前尚未完成的淡变。</summary>
-        /// <param name="fade">是否在停止前淡出。</param>
-        public void StopBGM(bool fade = true)
-        {
-            ApplyBgmRequest(BGMType.None, null, fade);
-        }
-
-        /// <summary>取消旧淡变后应用最新的 BGM 状态请求。</summary>
-        /// <param name="type">请求后的背景音乐状态。</param>
-        /// <param name="clip">目标曲目；为空表示停止播放。</param>
-        /// <param name="fade">是否执行淡变。</param>
-        private void ApplyBgmRequest(BGMType type, AudioClip clip, bool fade)
-        {
-            StopBgmTransition();
-            currentBGM = type;
-
-            if (fade)
-            {
-                bgmTransition = StartCoroutine(FadeBGM(clip));
-                return;
-            }
-
-            if (clip == null)
-            {
-                bgmSource.Stop();
-                return;
-            }
-
-            bgmSource.clip = clip;
-            ApplyBgmPlaybackVolume();
-            bgmSource.Play();
-        }
-
-        /// <summary>停止当前淡变，避免旧协程覆盖最新请求。</summary>
-        private void StopBgmTransition()
-        {
-            if (bgmTransition != null)
-            {
-                StopCoroutine(bgmTransition);
-                bgmTransition = null;
-            }
-        }
-
-        public void PauseBGM()
-        {
-            bgmSource.Pause();
-        }
-
-        public void ResumeBGM()
-        {
-            bgmSource.UnPause();
-        }
-
-        private AudioClip GetBGMClip(BGMType type)
-        {
-            return type switch
-            {
-                BGMType.Menu => menuBGM,
-                BGMType.Game => gameBGM,
-                BGMType.Battle => battleBGM,
-                BGMType.Victory => victoryBGM,
-                BGMType.GameOver => gameOverBGM,
-                _ => null
-            };
-        }
-
-        /// <summary>将当前曲目淡出后切换、淡入目标曲目；空目标表示淡出停止。</summary>
-        /// <param name="targetClip">目标曲目；为空时淡出后停止。</param>
-        /// <returns>逐帧执行的 BGM 淡变。</returns>
-        private IEnumerator FadeBGM(AudioClip targetClip)
-        {
-            float startVolume = bgmSource.volume;
-            float elapsed = 0f;
-
-            while (elapsed < bgmFadeOutTime)
-            {
-                elapsed += Time.unscaledDeltaTime;
-                bgmSource.volume = Mathf.Lerp(startVolume, 0f, elapsed / bgmFadeOutTime);
-                yield return null;
-            }
-
-            if (targetClip == null)
-            {
-                bgmSource.Stop();
-                yield break;
-            }
-
-            bgmSource.Stop();
-            bgmSource.clip = targetClip;
-            bgmSource.Play();
-
-            elapsed = 0f;
-            while (elapsed < bgmFadeInTime)
-            {
-                elapsed += Time.unscaledDeltaTime;
-                bgmSource.volume = Mathf.Lerp(0f, GetBgmPlaybackVolume(), elapsed / bgmFadeInTime);
-                yield return null;
-            }
-
-            ApplyBgmPlaybackVolume();
+            _turnSource = source;
+            source.transform.position = transform.position;
+            PlaySfxSource(source, clip, 1f, 1f, 0f);
         }
 
         public void PlaySFX(AudioClip clip, float volume = 1f, float pitch = 1f)
@@ -272,8 +166,7 @@ namespace GameSystem
             if (source == null) return;
 
             source.transform.position = transform.position;
-            source.spatialBlend = 0f;
-            PlaySfxSource(source, clip, volume, pitch);
+            PlaySfxSource(source, clip, volume, pitch, 0f);
         }
 
         public void PlaySFXByName(string name, float volume = 1f, float pitch = 1f)
@@ -296,8 +189,7 @@ namespace GameSystem
             if (source == null) return;
 
             source.transform.position = position;
-            source.spatialBlend = 1f;
-            PlaySfxSource(source, clip, volume, pitch);
+            PlaySfxSource(source, clip, volume, pitch, 1f);
         }
 
         public void PlayRandomSFX(AudioClip[] clips, float volume = 1f)
@@ -306,6 +198,21 @@ namespace GameSystem
 
             AudioClip clip = clips[Random.Range(0, clips.Length)];
             PlaySFX(clip, volume);
+        }
+
+        /// <summary>停止所有正在播放的音效，并立即将其音源归还音效池。</summary>
+        public void StopAllSFX()
+        {
+            foreach (AudioSource source in sfxSources)
+            {
+                if (source == null || !sfxLocalVolumes.ContainsKey(source))
+                {
+                    continue;
+                }
+
+                sfxLeaseIds[source]++;
+                RecycleSfxSource(source);
+            }
         }
 
         private AudioSource GetSFXSource()
@@ -341,12 +248,19 @@ namespace GameSystem
         }
 
         /// <summary>按主音量、音效分类音量和调用方倍率设置单次音效。</summary>
-        private void PlaySfxSource(AudioSource source, AudioClip clip, float volume, float pitch)
+        private void PlaySfxSource(
+            AudioSource source,
+            AudioClip clip,
+            float volume,
+            float pitch,
+            float fallbackSpatialBlend)
         {
+            ResolveSfxSettings(clip, fallbackSpatialBlend, out float catalogVolume, out float spatialBlend);
             source.Stop();
             source.clip = clip;
-            sfxLocalVolumes[source] = volume;
-            source.volume = MasterVolume * SFXVolume * volume;
+            source.spatialBlend = spatialBlend;
+            sfxLocalVolumes[source] = volume * catalogVolume;
+            source.volume = MasterVolume * SFXVolume * sfxLocalVolumes[source];
             source.pitch = pitch;
             source.Play();
 
@@ -359,6 +273,11 @@ namespace GameSystem
             StartCoroutine(ReturnSFXSource(source, playbackLength, leaseId));
         }
 
+        /// <summary>在音效时长结束且租约仍有效时归还音源。</summary>
+        /// <param name="source">正在播放音效的音源。</param>
+        /// <param name="delay">本次音效预计播放时长。</param>
+        /// <param name="leaseId">本次播放的租约编号。</param>
+        /// <returns>音效播放期间等待，之后归还有效音源的协程。</returns>
         private IEnumerator ReturnSFXSource(AudioSource source, float delay, int leaseId)
         {
             yield return new WaitForSecondsRealtime(delay);
@@ -370,6 +289,18 @@ namespace GameSystem
                 yield break;
             }
 
+            RecycleSfxSource(source);
+        }
+
+        /// <summary>停止音效并复位音源，再将其放回可复用队列。</summary>
+        /// <param name="source">已结束或被显式停止的音源。</param>
+        private void RecycleSfxSource(AudioSource source)
+        {
+            if (_turnSource == source)
+            {
+                _turnSource = null;
+            }
+
             source.Stop();
             source.clip = null;
             source.spatialBlend = 0f;
@@ -377,33 +308,6 @@ namespace GameSystem
             source.transform.localRotation = Quaternion.identity;
             sfxLocalVolumes.Remove(source);
             sfxPool.Enqueue(source);
-        }
-
-        public void SetMasterVolume(float volume)
-        {
-            MasterVolume = Mathf.Clamp01(volume);
-
-            if (mainMixer != null)
-            {
-                float db = MasterVolume > 0 ? Mathf.Log10(MasterVolume) * 20 : -80f;
-                mainMixer.SetFloat(masterVolumeParam, db);
-            }
-
-            ApplyBgmPlaybackVolume();
-            ApplySfxPlaybackVolumes();
-        }
-
-        public void SetBGMVolume(float volume)
-        {
-            BGMVolume = Mathf.Clamp01(volume);
-
-            if (mainMixer != null)
-            {
-                float db = BGMVolume > 0 ? Mathf.Log10(BGMVolume) * 20 : -80f;
-                mainMixer.SetFloat(bgmVolumeParam, db);
-            }
-
-            ApplyBgmPlaybackVolume();
         }
 
         public void SetSFXVolume(float volume)
@@ -431,22 +335,6 @@ namespace GameSystem
             }
         }
 
-        public void OnGamePause()
-        {
-            ApplyBgmPlaybackVolume();
-        }
-
-        public void OnGameResume()
-        {
-            ApplyBgmPlaybackVolume();
-        }
-
-        private void ApplyBgmPlaybackVolume()
-        {
-            if (bgmSource != null)
-                bgmSource.volume = GetBgmPlaybackVolume();
-        }
-
         /// <summary>根据最新主音量与 SFX 音量更新所有正在播放的音效。</summary>
         private void ApplySfxPlaybackVolumes()
         {
@@ -457,15 +345,6 @@ namespace GameSystem
                     entry.Key.volume = MasterVolume * SFXVolume * entry.Value;
                 }
             }
-        }
-
-        private float GetBgmPlaybackVolume()
-        {
-            float volume = MasterVolume * BGMVolume;
-            if (_pauseService != null && _pauseService.IsPaused && lowerVolumeOnPause)
-                volume *= pauseVolumeMultiplier;
-
-            return volume;
         }
 
         public void SaveSettings()

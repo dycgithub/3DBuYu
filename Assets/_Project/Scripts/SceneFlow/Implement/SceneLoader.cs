@@ -9,6 +9,7 @@ using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using UnityEngine.Localization.Settings;
+using VContainer;
 using UIDocument = UnityEngine.UIElements.UIDocument;
 
 namespace GameSystem
@@ -34,6 +35,8 @@ namespace GameSystem
 
         [Header("启动行为")]
         public bool autoLoadOnStart = true;
+
+        [Inject] private AudioManager _audioManager;
 
         private readonly List<(Behaviour Component, bool WasEnabled)> _suspendedGameComponents = new();
         private readonly List<(Renderer Component, bool WasEnabled)> _suspendedGameRenderers = new();
@@ -70,6 +73,8 @@ namespace GameSystem
         /// <summary>按配置决定是否在启动时加载战斗场景。</summary>
         private void Start()
         {
+            PlaySceneBgm(SceneManager.GetActiveScene().name);
+
             if (autoLoadOnStart)
             {
                 LoadGameScene();
@@ -351,6 +356,21 @@ namespace GameSystem
             }
 
             SceneManager.SetActiveScene(scene);
+            PlaySceneBgm(scene.name);
+        }
+
+        /// <summary>按进入的主场景向跨场景音频管理器请求对应背景音乐。</summary>
+        /// <param name="sceneName">已激活场景的名称。</param>
+        private void PlaySceneBgm(string sceneName)
+        {
+            if (sceneName == mainMenuScene)
+            {
+                _audioManager.PlayBGM(BGMType.Menu);
+            }
+            else if (sceneName == gameScene)
+            {
+                _audioManager.PlayBGM(BGMType.Game);
+            }
         }
 
         /// <summary>让 SupplyScene 的镜头混合在全局暂停期间继续更新。</summary>
